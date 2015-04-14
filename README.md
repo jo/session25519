@@ -22,6 +22,21 @@ From [miniLock](https://github.com/kaepora/miniLock):
 > of adequate entropy can be used as the basis for deriving a private key.
 
 
+## Resources
+
+### BLAKE2s-JS
+Origin: https://github.com/dchest/blake2s-js
+License: Public domain
+
+### scrypt-async-js
+Origin: https://github.com/dchest/scrypt-async-js
+License: BSD-Like
+
+### TweetNaCL
+Origin: https://github.com/dchest/tweetnacl-js
+License: None (public domain)
+
+
 ## Test
 ```sh
 npm test
