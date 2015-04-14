@@ -1,0 +1,34 @@
+{
+  "name": "session25519",
+  "version": "1.0.0",
+  "description": "Derive curve25519 key pair from username/password via scrypt.",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test.js | tap-spec",
+    "build": "browserify ./ > dist/session25519.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:jo/session25519.git"
+  },
+  "keywords": [
+    "curve25519",
+    "scrypt"
+  ],
+  "author": "Johannes J. Schmidt <schmidt@netzmerk.com> (http://die-tf.de/)",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/jo/session25519/issues"
+  },
+  "homepage": "https://github.com/jo/session25519",
+  "dependencies": {
+    "blake2s-js": "^1.0.3",
+    "scrypt-async": "^1.0.0",
+    "tweetnacl": "git://github.com/jo/tweetnacl-js.git#75-reduce-browserify-build"
+  },
+  "devDependencies": {
+    "browserify": "^9.0.8",
+    "tap-spec": "^3.0.0",
+    "tape": "^4.0.0"
+  }
+}
