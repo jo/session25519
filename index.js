@@ -28,7 +28,8 @@ module.exports = function session (email, password, callback) {
     try {
       var keyPair = nacl.box.keyPair.fromSecretKey(keyBytes)
       callback(null, keyPair)
-    } catch(err) {
+    }
+    catch (err) {
       callback(err)
     }
   })
