@@ -1,4 +1,6 @@
 (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+
+},{}],2:[function(require,module,exports){
 var BLAKE2s = (function() {
 
   var MAX_DIGEST_LENGTH = 32;
@@ -1336,12 +1338,10 @@ var BLAKE2s = (function() {
 
 if (typeof module !== 'undefined' && module.exports) module.exports = BLAKE2s;
 
-},{}],2:[function(require,module,exports){
-
 },{}],3:[function(require,module,exports){
 /*!
  * Fast "async" scrypt implementation in JavaScript.
- * Copyright (c) 2013-2014 Dmitry Chestnykh | BSD License
+ * Copyright (c) 2013-2015 Dmitry Chestnykh | BSD License
  * https://github.com/dchest/scrypt-async-js
  */
 
@@ -1350,19 +1350,25 @@ if (typeof module !== 'undefined' && module.exports) module.exports = BLAKE2s;
  */
 
 /**
- * scrypt(password, salt, logN, r, dkLen, interruptStep, callback, encoding)
+ * scrypt(password, salt, logN, r, dkLen, [interruptStep], callback, [encoding])
  *
  * Derives a key from password and salt and calls callback
  * with derived key as the only argument.
  *
+ * Calculations are interrupted with setImmediate (or zero setTimeout) at the
+ * given interruptSteps to avoid freezing the browser. If interruptStep is not
+ * given, it defaults to 1000. If it's zero, the callback is called immediately
+ * after the calculation, avoiding setImmediate.
+ *
  * @param {string|Array.<number>} password Password.
  * @param {string|Array.<number>} salt Salt.
- * @param {number} logN  CPU/memory cost parameter (1 to 31).
- * @param {number} r     Block size parameter.
- * @param {number} dkLen Length of derived key.
- * @param {number} interruptStep Steps to split calculation with timeouts (default 1000).
- * @param {function(string)} callback Callback function.
- * @param {string?} encoding Result encoding ("base64", "hex", or null).
+ * @param {number}  logN  CPU/memory cost parameter (1 to 31).
+ * @param {number}  r     Block size parameter.
+ * @param {number}  dkLen Length of derived key.
+ * @param {number?} interruptStep (optional) Steps to split calculation with timeouts (default 1000).
+ * @param {function(string|Array.<number>)} callback Callback function.
+ * @param {string?} encoding (optional) Result encoding ("base64", "hex", or null).
+ *
  */
 function scrypt(password, salt, logN, r, dkLen, interruptStep, callback, encoding) {
   'use strict';
@@ -1631,7 +1637,7 @@ function scrypt(password, salt, logN, r, dkLen, interruptStep, callback, encodin
           } else {
               arr.push((c>>12) | 224);
               arr.push(((c>>6) & 63) | 128);
-              arr.push((c & 64) | 128);
+              arr.push((c & 63) | 128);
           }
       }
       return arr;
@@ -1674,7 +1680,7 @@ function scrypt(password, salt, logN, r, dkLen, interruptStep, callback, encodin
     }
     if (len % 3 > 0) {
       arr[arr.length-1] = '=';
-      if (len % 3 == 1) arr[arr.length-2] = '=';
+      if (len % 3 === 1) arr[arr.length-2] = '=';
     }
     return arr.join('');
   }
@@ -1696,9 +1702,9 @@ function scrypt(password, salt, logN, r, dkLen, interruptStep, callback, encodin
     throw new Error('scrypt: parameters are too large');
 
   // Decode strings.
-  if (typeof password == 'string')
+  if (typeof password === 'string')
     password = stringToUTF8Bytes(password);
-  if (typeof salt == 'string')
+  if (typeof salt === 'string')
     salt = stringToUTF8Bytes(salt);
 
   if (typeof Int32Array !== 'undefined') {
@@ -1755,42 +1761,120 @@ function scrypt(password, salt, logN, r, dkLen, interruptStep, callback, encodin
     }
   }
 
+  var nextTick = (typeof setImmediate !== 'undefined') ? setImmediate : setTimeout;
+
   function interruptedFor(start, end, step, fn, donefn) {
     (function performStep() {
-      setTimeout(function() {
+      nextTick(function() {
         fn(start, start + step < end ? start + step : end);
         start += step;
         if (start < end)
           performStep();
         else
           donefn();
-        }, 0);
+        });
     })();
   }
 
-  // Note: step argument for interruptedFor must be divisible by
-  // two, since smixStepX work in increments of 2.
-  if (!interruptStep) interruptStep = 1000;
-  
-  smixStart();
-  interruptedFor(0, N, interruptStep*2, smixStep1, function() {
-    interruptedFor(0, N, interruptStep*2, smixStep2, function () {
-      smixFinish();
+  function getResult(enc) {
       var result = PBKDF2_HMAC_SHA256_OneIter(password, B, dkLen);
-      if (encoding == "base64")
-        callback(bytesToBase64(result));
-      else if (encoding == "hex")
-        callback(bytesToHex(result));
+      if (enc === 'base64')
+        return bytesToBase64(result);
+      else if (enc === 'hex')
+        return bytesToHex(result);
       else
-        callback(result);
+        return result;
+  }
+
+  if (typeof interruptStep === 'function') {
+    // Called as: scrypt(...,      callback, [encoding])
+    //  shifting: scrypt(..., interruptStep,  callback, [encoding])
+    encoding = callback;
+    callback = interruptStep;
+    interruptStep = 1000;
+  }
+
+  if (interruptStep <= 0) {
+    //
+    // Blocking async variant, calls callback.
+    //
+    smixStart();
+    smixStep1(0, N);
+    smixStep2(0, N);
+    smixFinish();
+    callback(getResult(encoding));
+
+  } else {
+    //
+    // Async variant with interruptions, calls callback.
+    //
+    smixStart();
+    interruptedFor(0, N, interruptStep*2, smixStep1, function() {
+      interruptedFor(0, N, interruptStep*2, smixStep2, function () {
+        smixFinish();
+        callback(getResult(encoding));
+      });
     });
-  });
+  }
 }
 
 if (typeof module !== 'undefined') module.exports = scrypt;
 
 },{}],4:[function(require,module,exports){
 (function (Buffer){
+// Written in 2014-2016 by Dmitry Chestnykh and Devi Mandiri.
+// Public domain.
+(function(root, f) {
+  'use strict';
+  if (typeof module !== 'undefined' && module.exports) module.exports = f();
+  else if (root.nacl) root.nacl.util = f();
+  else {
+    root.nacl = {};
+    root.nacl.util = f();
+  }
+}(this, function() {
+  'use strict';
+
+  var util = {};
+
+  util.decodeUTF8 = function(s) {
+    var i, d = unescape(encodeURIComponent(s)), b = new Uint8Array(d.length);
+    for (i = 0; i < d.length; i++) b[i] = d.charCodeAt(i);
+    return b;
+  };
+
+  util.encodeUTF8 = function(arr) {
+    var i, s = [];
+    for (i = 0; i < arr.length; i++) s.push(String.fromCharCode(arr[i]));
+    return decodeURIComponent(escape(s.join('')));
+  };
+
+  util.encodeBase64 = function(arr) {
+    if (typeof btoa === 'undefined') {
+      return (new Buffer(arr)).toString('base64');
+    } else {
+      var i, s = [], len = arr.length;
+      for (i = 0; i < len; i++) s.push(String.fromCharCode(arr[i]));
+      return btoa(s.join(''));
+    }
+  };
+
+  util.decodeBase64 = function(s) {
+    if (typeof atob === 'undefined') {
+      return new Uint8Array(Array.prototype.slice.call(new Buffer(s, 'base64'), 0));
+    } else {
+      var i, d = atob(s), b = new Uint8Array(d.length);
+      for (i = 0; i < d.length; i++) b[i] = d.charCodeAt(i);
+      return b;
+    }
+  };
+
+  return util;
+
+}));
+
+}).call(this,require("buffer").Buffer)
+},{"buffer":1}],5:[function(require,module,exports){
 (function(nacl) {
 'use strict';
 
@@ -1799,8 +1883,6 @@ if (typeof module !== 'undefined') module.exports = scrypt;
 //
 // Implementation derived from TweetNaCl version 20140427.
 // See for details: http://tweetnacl.cr.yp.to/
-
-/* jshint newcap: false */
 
 var gf = function(init) {
   var i, r = new Float64Array(16);
@@ -2593,7 +2675,7 @@ poly1305.prototype.update = function(m, mpos, bytes) {
     this.leftover += want;
     if (this.leftover < 16)
       return;
-    this.blocks(buffer, 0, 16);
+    this.blocks(this.buffer, 0, 16);
     this.leftover = 0;
   }
 
@@ -3130,7 +3212,7 @@ function crypto_scalarmult(q, n, p) {
     d[i]=a[i]=c[i]=0;
   }
   a[0]=d[0]=1;
-  for (i=254;i>=0;--i) {
+  for (i=254; i>=0; --i) {
     r=(z[i>>>3]>>>(i&7))&1;
     sel25519(a,b,r);
     sel25519(c,d,r);
@@ -3887,45 +3969,45 @@ var crypto_secretbox_KEYBYTES = 32,
 
 nacl.lowlevel = {
   crypto_core_hsalsa20: crypto_core_hsalsa20,
-  crypto_stream_xor : crypto_stream_xor,
-  crypto_stream : crypto_stream,
-  crypto_stream_salsa20_xor : crypto_stream_salsa20_xor,
-  crypto_stream_salsa20 : crypto_stream_salsa20,
-  crypto_onetimeauth : crypto_onetimeauth,
-  crypto_onetimeauth_verify : crypto_onetimeauth_verify,
-  crypto_verify_16 : crypto_verify_16,
-  crypto_verify_32 : crypto_verify_32,
-  crypto_secretbox : crypto_secretbox,
-  crypto_secretbox_open : crypto_secretbox_open,
-  crypto_scalarmult : crypto_scalarmult,
-  crypto_scalarmult_base : crypto_scalarmult_base,
-  crypto_box_beforenm : crypto_box_beforenm,
-  crypto_box_afternm : crypto_box_afternm,
-  crypto_box : crypto_box,
-  crypto_box_open : crypto_box_open,
-  crypto_box_keypair : crypto_box_keypair,
-  crypto_hash : crypto_hash,
-  crypto_sign : crypto_sign,
-  crypto_sign_keypair : crypto_sign_keypair,
-  crypto_sign_open : crypto_sign_open,
+  crypto_stream_xor: crypto_stream_xor,
+  crypto_stream: crypto_stream,
+  crypto_stream_salsa20_xor: crypto_stream_salsa20_xor,
+  crypto_stream_salsa20: crypto_stream_salsa20,
+  crypto_onetimeauth: crypto_onetimeauth,
+  crypto_onetimeauth_verify: crypto_onetimeauth_verify,
+  crypto_verify_16: crypto_verify_16,
+  crypto_verify_32: crypto_verify_32,
+  crypto_secretbox: crypto_secretbox,
+  crypto_secretbox_open: crypto_secretbox_open,
+  crypto_scalarmult: crypto_scalarmult,
+  crypto_scalarmult_base: crypto_scalarmult_base,
+  crypto_box_beforenm: crypto_box_beforenm,
+  crypto_box_afternm: crypto_box_afternm,
+  crypto_box: crypto_box,
+  crypto_box_open: crypto_box_open,
+  crypto_box_keypair: crypto_box_keypair,
+  crypto_hash: crypto_hash,
+  crypto_sign: crypto_sign,
+  crypto_sign_keypair: crypto_sign_keypair,
+  crypto_sign_open: crypto_sign_open,
 
-  crypto_secretbox_KEYBYTES : crypto_secretbox_KEYBYTES,
-  crypto_secretbox_NONCEBYTES : crypto_secretbox_NONCEBYTES,
-  crypto_secretbox_ZEROBYTES : crypto_secretbox_ZEROBYTES,
-  crypto_secretbox_BOXZEROBYTES : crypto_secretbox_BOXZEROBYTES,
-  crypto_scalarmult_BYTES : crypto_scalarmult_BYTES,
-  crypto_scalarmult_SCALARBYTES : crypto_scalarmult_SCALARBYTES,
-  crypto_box_PUBLICKEYBYTES : crypto_box_PUBLICKEYBYTES,
-  crypto_box_SECRETKEYBYTES : crypto_box_SECRETKEYBYTES,
-  crypto_box_BEFORENMBYTES : crypto_box_BEFORENMBYTES,
-  crypto_box_NONCEBYTES : crypto_box_NONCEBYTES,
-  crypto_box_ZEROBYTES : crypto_box_ZEROBYTES,
-  crypto_box_BOXZEROBYTES : crypto_box_BOXZEROBYTES,
-  crypto_sign_BYTES : crypto_sign_BYTES,
-  crypto_sign_PUBLICKEYBYTES : crypto_sign_PUBLICKEYBYTES,
-  crypto_sign_SECRETKEYBYTES : crypto_sign_SECRETKEYBYTES,
+  crypto_secretbox_KEYBYTES: crypto_secretbox_KEYBYTES,
+  crypto_secretbox_NONCEBYTES: crypto_secretbox_NONCEBYTES,
+  crypto_secretbox_ZEROBYTES: crypto_secretbox_ZEROBYTES,
+  crypto_secretbox_BOXZEROBYTES: crypto_secretbox_BOXZEROBYTES,
+  crypto_scalarmult_BYTES: crypto_scalarmult_BYTES,
+  crypto_scalarmult_SCALARBYTES: crypto_scalarmult_SCALARBYTES,
+  crypto_box_PUBLICKEYBYTES: crypto_box_PUBLICKEYBYTES,
+  crypto_box_SECRETKEYBYTES: crypto_box_SECRETKEYBYTES,
+  crypto_box_BEFORENMBYTES: crypto_box_BEFORENMBYTES,
+  crypto_box_NONCEBYTES: crypto_box_NONCEBYTES,
+  crypto_box_ZEROBYTES: crypto_box_ZEROBYTES,
+  crypto_box_BOXZEROBYTES: crypto_box_BOXZEROBYTES,
+  crypto_sign_BYTES: crypto_sign_BYTES,
+  crypto_sign_PUBLICKEYBYTES: crypto_sign_PUBLICKEYBYTES,
+  crypto_sign_SECRETKEYBYTES: crypto_sign_SECRETKEYBYTES,
   crypto_sign_SEEDBYTES: crypto_sign_SEEDBYTES,
-  crypto_hash_BYTES : crypto_hash_BYTES
+  crypto_hash_BYTES: crypto_hash_BYTES
 };
 
 /* High-level API */
@@ -3952,39 +4034,13 @@ function cleanup(arr) {
   for (var i = 0; i < arr.length; i++) arr[i] = 0;
 }
 
-nacl.util = {};
-
-nacl.util.decodeUTF8 = function(s) {
-  var i, d = unescape(encodeURIComponent(s)), b = new Uint8Array(d.length);
-  for (i = 0; i < d.length; i++) b[i] = d.charCodeAt(i);
-  return b;
-};
-
-nacl.util.encodeUTF8 = function(arr) {
-  var i, s = [];
-  for (i = 0; i < arr.length; i++) s.push(String.fromCharCode(arr[i]));
-  return decodeURIComponent(escape(s.join('')));
-};
-
-nacl.util.encodeBase64 = function(arr) {
-  if (typeof btoa === 'undefined') {
-    return (new Buffer(arr)).toString('base64');
-  } else {
-    var i, s = [], len = arr.length;
-    for (i = 0; i < len; i++) s.push(String.fromCharCode(arr[i]));
-    return btoa(s.join(''));
-  }
-};
-
-nacl.util.decodeBase64 = function(s) {
-  if (typeof atob === 'undefined') {
-    return new Uint8Array(Array.prototype.slice.call(new Buffer(s, 'base64'), 0));
-  } else {
-    var i, d = atob(s), b = new Uint8Array(d.length);
-    for (i = 0; i < d.length; i++) b[i] = d.charCodeAt(i);
-    return b;
-  }
-};
+// TODO: Completely remove this in v0.15.
+if (!nacl.util) {
+  nacl.util = {};
+  nacl.util.decodeUTF8 = nacl.util.encodeUTF8 = nacl.util.encodeBase64 = nacl.util.decodeBase64 = function() {
+    throw new Error('nacl.util moved into separate package: https://github.com/dchest/tweetnacl-util-js');
+  };
+}
 
 nacl.randomBytes = function(n) {
   var b = new Uint8Array(n);
@@ -4181,26 +4237,22 @@ nacl.setPRNG = function(fn) {
 (function() {
   // Initialize PRNG if environment provides CSPRNG.
   // If not, methods calling randombytes will throw.
-  var crypto;
-  if (typeof window !== 'undefined') {
-    // Browser.
-    if (window.crypto && window.crypto.getRandomValues) {
-      crypto = window.crypto; // Standard
-    } else if (window.msCrypto && window.msCrypto.getRandomValues) {
-      crypto = window.msCrypto; // Internet Explorer 11+
-    }
-    if (crypto) {
-      nacl.setPRNG(function(x, n) {
-        var i, v = new Uint8Array(n);
-        crypto.getRandomValues(v);
-        for (i = 0; i < n; i++) x[i] = v[i];
-        cleanup(v);
-      });
-    }
+  var crypto = typeof self !== 'undefined' ? (self.crypto || self.msCrypto) : null;
+  if (crypto && crypto.getRandomValues) {
+    // Browsers.
+    var QUOTA = 65536;
+    nacl.setPRNG(function(x, n) {
+      var i, v = new Uint8Array(n);
+      for (i = 0; i < n; i += QUOTA) {
+        crypto.getRandomValues(v.subarray(i, i + Math.min(n - i, QUOTA)));
+      }
+      for (i = 0; i < n; i++) x[i] = v[i];
+      cleanup(v);
+    });
   } else if (typeof require !== 'undefined') {
     // Node.js.
     crypto = require('crypto');
-    if (crypto) {
+    if (crypto && crypto.randomBytes) {
       nacl.setPRNG(function(x, n) {
         var i, v = crypto.randomBytes(n);
         for (i = 0; i < n; i++) x[i] = v[i];
@@ -4210,13 +4262,13 @@ nacl.setPRNG = function(fn) {
   }
 })();
 
-})(typeof module !== 'undefined' && module.exports ? module.exports : (window.nacl = window.nacl || {}));
+})(typeof module !== 'undefined' && module.exports ? module.exports : (self.nacl = self.nacl || {}));
 
-}).call(this,require("buffer").Buffer)
-},{"buffer":2,"crypto":2}],5:[function(require,module,exports){
+},{"crypto":1}],6:[function(require,module,exports){
 var BLAKE2s = require('blake2s-js')
 var scrypt = require('scrypt-async')
 var nacl = require('tweetnacl')
+nacl.util = require('tweetnacl-util')
 
 // Code from https://github.com/kaepora/miniLock
 // src/js/miniLock.js
@@ -4249,4 +4301,4 @@ module.exports = function session(email, password, callback) {
   })
 }
 
-},{"blake2s-js":1,"scrypt-async":3,"tweetnacl":4}]},{},[5]);
+},{"blake2s-js":2,"scrypt-async":3,"tweetnacl":5,"tweetnacl-util":4}]},{},[6]);

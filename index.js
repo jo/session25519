@@ -1,6 +1,7 @@
 var BLAKE2s = require('blake2s-js')
 var scrypt = require('scrypt-async')
 var nacl = require('tweetnacl')
+nacl.util = require('tweetnacl-util')
 
 // Code from https://github.com/kaepora/miniLock
 // src/js/miniLock.js

@@ -1,5 +1,6 @@
 var test = require('tape')
 var nacl = require('tweetnacl')
+nacl.util = require('tweetnacl-util')
 
 var session25519 = require('./')
 

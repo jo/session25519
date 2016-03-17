@@ -23,12 +23,13 @@
   "homepage": "https://github.com/jo/session25519",
   "dependencies": {
     "blake2s-js": "^1.0.3",
-    "scrypt-async": "^1.0.0",
-    "tweetnacl": "git://github.com/jo/tweetnacl-js.git#75-reduce-browserify-build"
+    "scrypt-async": "^1.2.0",
+    "tweetnacl": "^0.14.0",
+    "tweetnacl-util": "^0.13.3"
   },
   "devDependencies": {
-    "browserify": "^9.0.8",
-    "tap-spec": "^3.0.0",
+    "browserify": "^13.0.0",
+    "tap-spec": "^4.1.1",
     "tape": "^4.0.0"
   }
 }
