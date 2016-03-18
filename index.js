@@ -22,9 +22,9 @@ module.exports = function session (email, password, callback) {
   getScryptKey(keyHash.digest(), nacl.util.decodeUTF8(email), function (keyBytes) {
     try {
       var keyPair = nacl.box.keyPair.fromSecretKey(new Uint8Array(keyBytes))
-      callback(null, keyPair)
+      return callback(null, keyPair)
     } catch (err) {
-      callback(err)
+      return callback(err)
     }
   })
 }
