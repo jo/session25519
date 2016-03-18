@@ -1,9 +1,10 @@
-var BLAKE2s = require('blake2s-js')
+var blake = require('blakejs')
 var scrypt = require('scrypt-async')
 var nacl = require('tweetnacl')
 nacl.util = require('tweetnacl-util')
 
-// Code from https://github.com/kaepora/miniLock/blob/master/src/js/miniLock.js
+// Code inspired by:
+// https://github.com/kaepora/miniLock/blob/master/src/js/miniLock.js
 
 // Input: User key hash (Uint8Array), Salt (Uint8Array), callback function
 // Result: Calls scrypt which returns 32 bytes of key material in an Array,
@@ -15,10 +16,10 @@ function getScryptKey (key, salt, callback) {
 }
 
 module.exports = function session (email, password, callback) {
-  var keyHash = new BLAKE2s(nacl.box.secretKeyLength)
-  keyHash.update(nacl.util.decodeUTF8(password))
+  var keyHash = blake.blake2s_init(nacl.box.secretKeyLength)
+  blake.blake2s_update(keyHash, nacl.util.decodeUTF8(password))
 
-  getScryptKey(keyHash.digest(), nacl.util.decodeUTF8(email), function (keyBytes) {
+  getScryptKey(blake.blake2s_final(keyHash), nacl.util.decodeUTF8(email), function (keyBytes) {
     try {
       var keyBytesUint8 = new Uint8Array(keyBytes)
 
@@ -28,9 +29,9 @@ module.exports = function session (email, password, callback) {
       // Hash the derived keyBytes for use as the 32 Byte seed for
       // an additional keypair used for signing. This signing
       // key pair will also be deterministically generated.
-      var signingKeyHash = new BLAKE2s(nacl.sign.seedLength)
-      signingKeyHash.update(keyBytesUint8)
-      var signingKeyPair = nacl.sign.keyPair.fromSeed(signingKeyHash.digest())
+      var signingKeyHash = blake.blake2s_init(nacl.sign.seedLength)
+      blake.blake2s_update(signingKeyHash, keyBytesUint8)
+      var signingKeyPair = nacl.sign.keyPair.fromSeed(blake.blake2s_final(signingKeyHash))
 
       // merge the signing keys into the keyPair
       keyPair.publicSigningKey = signingKeyPair.publicKey
