@@ -7,9 +7,8 @@ nacl.util = require('tweetnacl-util')
 // src/js/miniLock.js
 
 // Input: User key hash (Uint8Array), Salt (Uint8Array), callback function
-// Result: Calls scrypt which returns
-//    32 bytes of key material in a Uint8Array,
-//    which is then passed to the callback.
+// Result: Calls scrypt which returns 32 bytes of key material in an Array,
+// which is then passed to the callback.
 function getScryptKey (key, salt, callback) {
   scrypt(key, salt, 17, 8, 32, 1000, function (keyBytes) {
     return callback(keyBytes)
@@ -18,9 +17,7 @@ function getScryptKey (key, salt, callback) {
 
 module.exports = function session (email, password, callback) {
   var keyHash = new BLAKE2s(nacl.box.secretKeyLength)
-
   keyHash.update(nacl.util.decodeUTF8(password))
-
   var key = keyHash.digest()
   var salt = nacl.util.decodeUTF8(email)
 
@@ -28,8 +25,7 @@ module.exports = function session (email, password, callback) {
     try {
       var keyPair = nacl.box.keyPair.fromSecretKey(new Uint8Array(keyBytes))
       callback(null, keyPair)
-    }
-    catch (err) {
+    } catch (err) {
       callback(err)
     }
   })
