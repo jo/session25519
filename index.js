@@ -18,10 +18,8 @@ function getScryptKey (key, salt, callback) {
 module.exports = function session (email, password, callback) {
   var keyHash = new BLAKE2s(nacl.box.secretKeyLength)
   keyHash.update(nacl.util.decodeUTF8(password))
-  var key = keyHash.digest()
-  var salt = nacl.util.decodeUTF8(email)
 
-  getScryptKey(key, salt, function (keyBytes) {
+  getScryptKey(keyHash.digest(), nacl.util.decodeUTF8(email), function (keyBytes) {
     try {
       var keyPair = nacl.box.keyPair.fromSecretKey(new Uint8Array(keyBytes))
       callback(null, keyPair)
