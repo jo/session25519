@@ -3,8 +3,7 @@ var scrypt = require('scrypt-async')
 var nacl = require('tweetnacl')
 nacl.util = require('tweetnacl-util')
 
-// Code from https://github.com/kaepora/miniLock
-// src/js/miniLock.js
+// Code from https://github.com/kaepora/miniLock/blob/master/src/js/miniLock.js
 
 // Input: User key hash (Uint8Array), Salt (Uint8Array), callback function
 // Result: Calls scrypt which returns 32 bytes of key material in an Array,
