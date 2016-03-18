@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "node test.js | tap-spec",
-    "build": "browserify ./ > dist/session25519.js"
+    "build": "browserify index.js -o dist/session25519.js"
   },
   "repository": {
     "type": "git",

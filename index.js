@@ -20,7 +20,22 @@ module.exports = function session (email, password, callback) {
 
   getScryptKey(keyHash.digest(), nacl.util.decodeUTF8(email), function (keyBytes) {
     try {
-      var keyPair = nacl.box.keyPair.fromSecretKey(new Uint8Array(keyBytes))
+      var keyBytesUint8 = new Uint8Array(keyBytes)
+
+      // Generate a keyPair for encryption from the scrypt bytes
+      var keyPair = nacl.box.keyPair.fromSecretKey(keyBytesUint8)
+
+      // Hash the derived keyBytes for use as the 32 Byte seed for
+      // an additional keypair used for signing. This signing
+      // key pair will also be deterministically generated.
+      var signingKeyHash = new BLAKE2s(nacl.sign.seedLength)
+      signingKeyHash.update(keyBytesUint8)
+      var signingKeyPair = nacl.sign.keyPair.fromSeed(signingKeyHash.digest())
+
+      // merge the signing keys into the keyPair
+      keyPair.publicSigningKey = signingKeyPair.publicKey
+      keyPair.secretSigningKey = signingKeyPair.secretKey
+
       return callback(null, keyPair)
     } catch (err) {
       return callback(err)
