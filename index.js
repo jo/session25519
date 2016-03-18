@@ -12,8 +12,8 @@ nacl.util = require('tweetnacl-util')
 //    which is then passed to the callback.
 function getScryptKey (key, salt, callback) {
   scrypt(key, salt, 17, 8, 32, 1000, function (keyBytes) {
-    return callback(nacl.util.decodeBase64(keyBytes))
-  }, 'base64')
+    return callback(keyBytes)
+  }, null)
 }
 
 module.exports = function session (email, password, callback) {
@@ -26,7 +26,7 @@ module.exports = function session (email, password, callback) {
 
   getScryptKey(key, salt, function (keyBytes) {
     try {
-      var keyPair = nacl.box.keyPair.fromSecretKey(keyBytes)
+      var keyPair = nacl.box.keyPair.fromSecretKey(new Uint8Array(keyBytes))
       callback(null, keyPair)
     }
     catch (err) {
