@@ -140,7 +140,7 @@ dkLen             = 64   // length of derived key
 // 64 Byte key material
 derivedBytes      = scrypt(key, salt, logN, r, dkLen)
 
-// Split the 64 Bytes of key material into to 32 Byte arrays
+// Split the 64 Bytes of key material into two 32 Byte arrays
 encryptKeySeed    = derivedBytes[0, 32]
 signKeySeed       = derivedBytes[32, 64]
 
