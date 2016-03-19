@@ -176,6 +176,14 @@ using `setImmediate`:
 - Origin: https://github.com/dchest/tweetnacl-js
 - License: Public Domain
 
+### tweetnacl-util-js
+- Origin: https://github.com/dchest/tweetnacl-util-js
+- License: Public Domain
+
+### base64-js
+- Origin: https://github.com/beatgammit/base64-js
+- License: MIT
+
 ## Build
 
 You can build a `dist` version of `session25519` using `browserify`. There is a
