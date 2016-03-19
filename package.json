@@ -1,7 +1,7 @@
 {
   "name": "session25519",
-  "version": "1.0.0",
-  "description": "Derive curve25519 key pair from username/password via scrypt.",
+  "version": "2.0.0",
+  "description": "Derive Curve25519 encryption keys and ed25519 signing keys from username and password via BLAKE2b hash and scrypt.",
   "main": "index.js",
   "scripts": {
     "test": "node test.js | tap-spec",

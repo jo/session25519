@@ -1,43 +1,98 @@
 var blake = require('blakejs')
 var scrypt = require('scrypt-async')
 var nacl = require('tweetnacl')
-nacl.util = require('tweetnacl-util')
+nacl.util = require('tweetnacl-util') // needed only for v1
+var base64 = require('base64-js')
 
 // Code inspired by:
 // https://github.com/kaepora/miniLock/blob/master/src/js/miniLock.js
 
-// Input: User key hash (Uint8Array), Salt (Uint8Array), callback function
-// Result: Calls scrypt which returns 32 bytes of key material in an Array,
-// which is then passed to the callback.
-function getScryptKey (key, salt, callback) {
-  scrypt(key, salt, 17, 8, 32, 1000, function (keyBytes) {
+// Input:
+//   key                      // User key hash (Uint8Array)
+//   salt                     // Salt (email or username) (Uint8Array)
+//   logN              = 17   // CPU/memory cost parameter (Integer 1 to 31)
+//   r                 = 8    // Block size parameter
+//   dkLen             = 32   // Length of derived key (32 or 64)
+//   interruptStep     = 1000 // Steps to split calculation with timeouts
+//   callback function
+//
+// Result:
+//   Returns 32 bytes of scrypt derived key material in an Array,
+//   which is then passed to the callback.
+//
+function getScryptKey (key, salt, logN, r, dkLen, interruptStep, callback) {
+  'use strict'
+
+  scrypt(key, salt, logN, r, dkLen, interruptStep, function (keyBytes) {
     return callback(keyBytes)
   }, null)
 }
 
-module.exports = function session (email, password, callback) {
-  var keyHash = blake.blake2s_init(nacl.box.secretKeyLength)
-  blake.blake2s_update(keyHash, nacl.util.decodeUTF8(password))
+// Input:
+//  email       // A UTF-8 username or email
+//  password    // A UTF-8 passphrase
+//  callback    // A callback function
+//  version     // A string function version, v1 (legacy), v2 current.
+//
+// Result:
+//   An object literal with keys
+//
+module.exports = function session (email, password, callback, version) {
+  'use strict'
 
-  getScryptKey(blake.blake2s_final(keyHash), nacl.util.decodeUTF8(email), function (keyBytes) {
+  var scryptKey, dkLen
+
+  // set the default version to the newer and more secure one
+  // developers who are upgrading will need to specify v1 to keep
+  // old behaviors.
+  if (version === undefined) version = 'v2'
+
+  if (version === 'v1') {
+    dkLen = 32
+
+    // A 32 Byte BLAKE2s hash of the password bytes
+    scryptKey = blake.blake2s(nacl.util.decodeUTF8(password))
+  } else if (version === 'v2') {
+    dkLen = 64
+
+    // A 64 Byte BLAKE2b hash of the password string,
+    // keyed like an HMAC with the other args to this function
+    // to strengthen the Hash passed to scrypt. v2 passes
+    // 64 Bytes to scrypt and gets 64 Bytes of derived key material
+    // out of it as well.
+    var blakeHashKey = blake.blake2b([email, version].toString())
+    scryptKey = blake.blake2b(password, blakeHashKey)
+  }
+
+  getScryptKey(scryptKey, email, 17, 8, dkLen, 1000, function (scryptByteArray) {
     try {
-      var keyBytesUint8 = new Uint8Array(keyBytes)
+      var keys, boxKeyPairSeed, signKeyPairSeed, boxKeyPair, signKeyPair
+      var seedBytesUint8Array = new Uint8Array(scryptByteArray)
 
-      // Generate a keyPair for encryption from the scrypt bytes
-      var keyPair = nacl.box.keyPair.fromSecretKey(keyBytesUint8)
+      // 32 Bytes for v1, 64 Bytes for v2
+      if (dkLen === 32) {
+        keys = nacl.box.keyPair.fromSecretKey(seedBytesUint8Array)
+      } else if (dkLen === 64) {
+        // First 32B for the encryption seed, last 32B for signing seed
+        boxKeyPairSeed = seedBytesUint8Array.slice(0, 32)
+        signKeyPairSeed = seedBytesUint8Array.slice(32, 64)
 
-      // Hash the derived keyBytes for use as the 32 Byte seed for
-      // an additional keypair used for signing. This signing
-      // key pair will also be deterministically generated.
-      var signingKeyHash = blake.blake2s_init(nacl.sign.seedLength)
-      blake.blake2s_update(signingKeyHash, keyBytesUint8)
-      var signingKeyPair = nacl.sign.keyPair.fromSeed(blake.blake2s_final(signingKeyHash))
+        // Generate a key pair for encryption from the scrypt bytes
+        boxKeyPair = nacl.box.keyPair.fromSecretKey(boxKeyPairSeed)
+        signKeyPair = nacl.sign.keyPair.fromSeed(signKeyPairSeed)
 
-      // merge the signing keys into the keyPair
-      keyPair.publicSigningKey = signingKeyPair.publicKey
-      keyPair.secretSigningKey = signingKeyPair.secretKey
+        keys = {}
+        keys.publicBoxKey = boxKeyPair.publicKey
+        keys.publicBoxKeyBase64 = base64.fromByteArray(boxKeyPair.publicKey)
+        keys.secretBoxKey = boxKeyPair.secretKey
+        keys.secretBoxKeyBase64 = base64.fromByteArray(boxKeyPair.secretKey)
+        keys.publicSignKey = signKeyPair.publicKey
+        keys.publicSignKeyBase64 = base64.fromByteArray(signKeyPair.publicKey)
+        keys.secretSignKey = signKeyPair.secretKey
+        keys.secretSignKeyBase64 = base64.fromByteArray(signKeyPair.secretKey)
+      }
 
-      return callback(null, keyPair)
+      return callback(null, keys)
     } catch (err) {
       return callback(err)
     }

@@ -1,20 +1,56 @@
 var test = require('tape')
-var nacl = require('tweetnacl')
-nacl.util = require('tweetnacl-util')
+var base64 = require('base64-js')
 
-var session25519 = require('./')
+var session25519 = require('./index.js')
+// var session25519 = require('./dist/session25519.js')
 
-test('basic', function (t) {
+test('v1 explicit (legacy version)', function (t) {
   session25519('user@example.com', 'secret', function (err, key) {
     t.notOk(err, 'no error')
 
     t.deepEqual(key, {
-      publicKey: nacl.util.decodeBase64('EHfJ2sJJt7LjamnuJul6TlCb5SkgAwJI1PP7q95jh04='),
-      secretKey: nacl.util.decodeBase64('p6FU22u0423AcS0AKY6I+XeBTMDzQLX57XOH9Xg28pw='),
-      publicSigningKey: nacl.util.decodeBase64('Nn+wSqE4L9Ty7SJBVnejbu/9vUr6lLaHB2j7o1KoREU='),
-      secretSigningKey: nacl.util.decodeBase64('HuEEPaNYy5aiURpcv34rHBthTAFf0BoLaNf8UYqrZ+k2f7BKoTgv1PLtIkFWd6Nu7/29SvqUtocHaPujUqhERQ==')
-    }, 'correct key has been calculated')
+      publicKey: base64.toByteArray('EHfJ2sJJt7LjamnuJul6TlCb5SkgAwJI1PP7q95jh04='),
+      secretKey: base64.toByteArray('p6FU22u0423AcS0AKY6I+XeBTMDzQLX57XOH9Xg28pw=')
+    }, 'correct v1 key has been calculated')
 
     t.end()
-  })
+  }, 'v1') // SPECIFIED v1 as last arg to retain legacy key output
+})
+
+test('v2 implicit', function (t) {
+  session25519('user@example.com', 'secret', function (err, key) {
+    t.notOk(err, 'no error')
+
+    t.deepEqual(key, {
+      publicBoxKey: base64.toByteArray('e5ecNjobMZJ564QyJVYBoqH0snU9brXFYH1v75RpMxs='),
+      publicBoxKeyBase64: 'e5ecNjobMZJ564QyJVYBoqH0snU9brXFYH1v75RpMxs=',
+      secretBoxKey: base64.toByteArray('w4mjtyfqrCvGqt3jLQFluCKloaZ4HyZ4QwrJRR50LIs='),
+      secretBoxKeyBase64: 'w4mjtyfqrCvGqt3jLQFluCKloaZ4HyZ4QwrJRR50LIs=',
+      publicSignKey: base64.toByteArray('Q9Ts3Uz6BcA3y4jVyaAjFaCE5HLyv9SHuDuklbQWmVQ='),
+      publicSignKeyBase64: 'Q9Ts3Uz6BcA3y4jVyaAjFaCE5HLyv9SHuDuklbQWmVQ=',
+      secretSignKey: base64.toByteArray('nXvLLFiIqECJ9pcRMdR6zX4X1Lw2o5taZPxFkLxDt+VD1OzdTPoFwDfLiNXJoCMVoITkcvK/1Ie4O6SVtBaZVA=='),
+      secretSignKeyBase64: 'nXvLLFiIqECJ9pcRMdR6zX4X1Lw2o5taZPxFkLxDt+VD1OzdTPoFwDfLiNXJoCMVoITkcvK/1Ie4O6SVtBaZVA=='
+    }, 'correct v2 key has been calculated')
+
+    t.end()
+  }) // No version arg
+})
+
+test('v2 explicit', function (t) {
+  session25519('user@example.com', 'secret', function (err, key) {
+    t.notOk(err, 'no error')
+
+    t.deepEqual(key, {
+      publicBoxKey: base64.toByteArray('e5ecNjobMZJ564QyJVYBoqH0snU9brXFYH1v75RpMxs='),
+      publicBoxKeyBase64: 'e5ecNjobMZJ564QyJVYBoqH0snU9brXFYH1v75RpMxs=',
+      secretBoxKey: base64.toByteArray('w4mjtyfqrCvGqt3jLQFluCKloaZ4HyZ4QwrJRR50LIs='),
+      secretBoxKeyBase64: 'w4mjtyfqrCvGqt3jLQFluCKloaZ4HyZ4QwrJRR50LIs=',
+      publicSignKey: base64.toByteArray('Q9Ts3Uz6BcA3y4jVyaAjFaCE5HLyv9SHuDuklbQWmVQ='),
+      publicSignKeyBase64: 'Q9Ts3Uz6BcA3y4jVyaAjFaCE5HLyv9SHuDuklbQWmVQ=',
+      secretSignKey: base64.toByteArray('nXvLLFiIqECJ9pcRMdR6zX4X1Lw2o5taZPxFkLxDt+VD1OzdTPoFwDfLiNXJoCMVoITkcvK/1Ie4O6SVtBaZVA=='),
+      secretSignKeyBase64: 'nXvLLFiIqECJ9pcRMdR6zX4X1Lw2o5taZPxFkLxDt+VD1OzdTPoFwDfLiNXJoCMVoITkcvK/1Ie4O6SVtBaZVA=='
+    }, 'correct v2 key has been calculated')
+
+    t.end()
+  }, 'v2') // SPECIFIED v2 as version
 })
