@@ -74,8 +74,8 @@ module.exports = function session (email, password, callback, version) {
         keys = nacl.box.keyPair.fromSecretKey(seedBytesUint8Array)
       } else if (dkLen === 64) {
         // First 32B for the encryption seed, last 32B for signing seed
-        boxKeyPairSeed = seedBytesUint8Array.slice(0, 32)
-        signKeyPairSeed = seedBytesUint8Array.slice(32, 64)
+        boxKeyPairSeed = seedBytesUint8Array.subarray(0, 32)
+        signKeyPairSeed = seedBytesUint8Array.subarray(32, 64)
 
         // Generate a key pair for encryption from the scrypt bytes
         boxKeyPair = nacl.box.keyPair.fromSecretKey(boxKeyPairSeed)
