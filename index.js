@@ -62,22 +62,25 @@ module.exports = function session (email, password, callback, version) {
 
   getScryptKey(scryptKey, email, 17, 8, dkLen, 1000, function (scryptByteArray) {
     try {
-      var keys, boxKeyPairSeed, signKeyPairSeed, boxKeyPair, signKeyPair
-      var seedBytesUint8Array = new Uint8Array(scryptByteArray)
+      var keys = {}
+      var seedBytesUint8Array, boxKeyPairSeed,
+        signKeyPairSeed, boxKeyPair, signKeyPair
 
-      // 32 Bytes for v1, 64 Bytes for v2
-      if (dkLen === 32) {
-        keys = nacl.box.keyPair.fromSecretKey(seedBytesUint8Array)
-      } else if (dkLen === 64) {
-        // First 32B for the encryption seed, last 32B for signing seed
-        boxKeyPairSeed = seedBytesUint8Array.subarray(0, 32)
+      // Convert scrypt Array of Bytes to Uint8Array
+      seedBytesUint8Array = new Uint8Array(scryptByteArray)
+
+      // Grab first 32 Bytes of scrypt seed for v1 and v2
+      // The first 32 Bytes are the same for dkLen 32 and 64!
+      boxKeyPairSeed = seedBytesUint8Array.subarray(0, 32)
+      boxKeyPair = nacl.box.keyPair.fromSecretKey(boxKeyPairSeed)
+
+      if (seedBytesUint8Array.length === 32) {
+        keys.publicKey = boxKeyPair.publicKey
+        keys.secretKey = boxKeyPair.secretKey
+      } else {
         signKeyPairSeed = seedBytesUint8Array.subarray(32, 64)
-
-        // Generate a key pair for encryption from the scrypt bytes
-        boxKeyPair = nacl.box.keyPair.fromSecretKey(boxKeyPairSeed)
         signKeyPair = nacl.sign.keyPair.fromSeed(signKeyPairSeed)
 
-        keys = {}
         keys.publicBoxKey = boxKeyPair.publicKey
         keys.publicBoxKeyBase64 = base64.fromByteArray(boxKeyPair.publicKey)
         keys.secretBoxKey = boxKeyPair.secretKey
