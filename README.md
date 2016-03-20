@@ -197,5 +197,5 @@ npm run build
 ## Test
 
 ```sh
-npm run test
+npm test
 ```
