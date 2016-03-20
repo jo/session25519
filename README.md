@@ -20,9 +20,9 @@ deterministic; for any given user ID (email or username) and password
 combination the same keys will always be generated.
 
 The code is simple, asynchronous, and uses only the fast and
-secure `BLAKE2s` and `BLAKE2b` hash functions, `scrypt` for
-strong key derivation, and `NaCL` compatible encryption
-and signing provided by `tweetnacl-js`.
+secure `BLAKE2s` hash function, `scrypt` with 64 Bytes of key material for
+strong key derivation, and `NaCL` compatible encryption and signing
+provided by `tweetnacl-js`.
 
 ## Security
 
@@ -35,24 +35,19 @@ and measured with password strength estimation tools like
 [zxcvbn](https://github.com/dropbox/zxcvbn) are critically important to
 the overall security of the system.
 
-## Version `v1` versus `v2`
+## Version 2.x.x Changes
 
-There are two versions of this function that you can call, `v1` and `v2`.
+In version 2.x.x of this package the `scrypt` key derivation was changed from
+32 Bytes of output to 64 Bytes. The first 32 Bytes remain the same as before when
+used as a seed for generating encryption keys. The extra 32 Bytes now being
+derived are used to seed the generation of a TweetNaCL digital signature
+key pair. These extra signing keys are now returned in the Object returned
+from this function. The security of this new approach has been reviewed by
+Dmitry Chestnykh ([@dchest](https://github.com/dchest)), who is the author
+of the TweetNacl.js package and a cryptography expert.
 
-`v1` is the original version (before there was a version). If you are upgrading from
-version `1.x.x` of this package you will want to specify the `v1` arg.  If you
-do not, the keys generated will not be the same deterministic keypair you would
-expect for a given user ID and password. If you specify `v1`, which is backwards
-compatible, everything should behave identically to before.
-
-The `scrypt` key derivation function in `v2` will now return 64 Bytes
-of derived key material (vs. 32B in `v1`). The first 32B are used to seed the
-`nacl.box.keyPair.fromSecretKey()` function, and the second 32B are used to seed
-the `nacl.sign.keyPair.fromSeed()` function. So now you get two full sets of keys
-returned.  One for encryption, and one for digital signatures. These keys are all
-returned as `Uint8Array` objects and can be used directly by TweetNaCL.js.
-For convenience, a Base64 encoded version of each key is also returned
-in the Object literal.
+As an additional convenience, a Base64 encoded version of each key is now also
+returned in the Object literal alongside the `Uint8Array` keys.
 
 ## Usage
 
@@ -61,39 +56,20 @@ passphrase and an Object Literal with the keys will be returned. The keys
 returned are [Uint8Array](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Uint8Array)
 objects.
 
-### Version 1 (Legacy) Output
-
-You must pass the `v1` arg as the last arg after the callback.
-
 ```js
 session25519('me@example.com', 'brig alert rope welsh foss rang orb', function(err, keys) {
   // {
   //   publicKey: ...,
-  //   secretKey: ...
-  // }
-}, 'v1')
-```
-
-### Version 2 (Default) Output
-
-You can optionally pass the `v2` arg as the last arg after the callback. If no
-arg is passed it will default to `v2`.
-
-```js
-session25519('me@example.com', 'brig alert rope welsh foss rang orb', function(err, keys) {
-  // {
-  //   publicBoxKey: ...,
-  //   publicBoxKeyBase64: ...,
-  //   secretBoxKey: ...,
-  //   secretBoxKeyBase64: ...,
+  //   publicKeyBase64: ...,
+  //   secretKey: ...,
+  //   secretKeyBase64: ...,
   //   publicSignKey: ...,
   //   publicSignKeyBase64: ...,
   //   secretSignKey: ...,
   //   secretSignKeyBase64: ...
   // }
-}, 'v2')
+})
 ```
-
 
 ## Crypto Description
 
@@ -108,28 +84,12 @@ From [miniLock](https://github.com/kaepora/miniLock):
 
 The following pseudo-code illustrates how `session25519` derives keys:
 
-### `v1`
-
 ```js
 key               = BLAKE2s(password) // A 32 Byte hash of the password
 salt              = email
 logN              = 17   // CPU/memory cost parameter (1 to 31)
 r                 = 8    // block size parameter
-dkLen             = 32   // length of derived key
-
-// Returns 32 Bytes of key material
-encryptionKeySeed = scrypt(key, salt, logN, r, dkLen)
-keyPair           = nacl.box.keyPair.fromSecretKey(encryptionKeySeed)
-```
-
-### `v2`
-
-```js
-key               = BLAKE2s(password) // A 32 Byte hash of the password
-salt              = email
-logN              = 17   // CPU/memory cost parameter (1 to 31)
-r                 = 8    // block size parameter
-dkLen             = 64   // length of derived key
+dkLen             = 64   // length of derived key in Bytes
 
 // Returns 64 Bytes of key material
 derivedBytes      = scrypt(key, salt, logN, r, dkLen)
