@@ -22,14 +22,14 @@ test('v2 implicit', function (t) {
     t.notOk(err, 'no error')
 
     t.deepEqual(key, {
-      publicBoxKey: base64.toByteArray('e5ecNjobMZJ564QyJVYBoqH0snU9brXFYH1v75RpMxs='),
-      publicBoxKeyBase64: 'e5ecNjobMZJ564QyJVYBoqH0snU9brXFYH1v75RpMxs=',
-      secretBoxKey: base64.toByteArray('w4mjtyfqrCvGqt3jLQFluCKloaZ4HyZ4QwrJRR50LIs='),
-      secretBoxKeyBase64: 'w4mjtyfqrCvGqt3jLQFluCKloaZ4HyZ4QwrJRR50LIs=',
-      publicSignKey: base64.toByteArray('Q9Ts3Uz6BcA3y4jVyaAjFaCE5HLyv9SHuDuklbQWmVQ='),
-      publicSignKeyBase64: 'Q9Ts3Uz6BcA3y4jVyaAjFaCE5HLyv9SHuDuklbQWmVQ=',
-      secretSignKey: base64.toByteArray('nXvLLFiIqECJ9pcRMdR6zX4X1Lw2o5taZPxFkLxDt+VD1OzdTPoFwDfLiNXJoCMVoITkcvK/1Ie4O6SVtBaZVA=='),
-      secretSignKeyBase64: 'nXvLLFiIqECJ9pcRMdR6zX4X1Lw2o5taZPxFkLxDt+VD1OzdTPoFwDfLiNXJoCMVoITkcvK/1Ie4O6SVtBaZVA=='
+      publicBoxKey: base64.toByteArray('EHfJ2sJJt7LjamnuJul6TlCb5SkgAwJI1PP7q95jh04='),
+      publicBoxKeyBase64: 'EHfJ2sJJt7LjamnuJul6TlCb5SkgAwJI1PP7q95jh04=',
+      secretBoxKey: base64.toByteArray('p6FU22u0423AcS0AKY6I+XeBTMDzQLX57XOH9Xg28pw='),
+      secretBoxKeyBase64: 'p6FU22u0423AcS0AKY6I+XeBTMDzQLX57XOH9Xg28pw=',
+      publicSignKey: base64.toByteArray('Fp5BVsrHfXRylmxaeIzPI8IUbJ+TzpX8sqFRAeFAAR0='),
+      publicSignKeyBase64: 'Fp5BVsrHfXRylmxaeIzPI8IUbJ+TzpX8sqFRAeFAAR0=',
+      secretSignKey: base64.toByteArray('8RBvdhPctH1OW49fCVOT9du8cIjf0T664FXEdml+ShAWnkFWysd9dHKWbFp4jM8jwhRsn5POlfyyoVEB4UABHQ=='),
+      secretSignKeyBase64: '8RBvdhPctH1OW49fCVOT9du8cIjf0T664FXEdml+ShAWnkFWysd9dHKWbFp4jM8jwhRsn5POlfyyoVEB4UABHQ=='
     }, 'correct v2 key has been calculated')
 
     t.end()
@@ -41,14 +41,14 @@ test('v2 explicit', function (t) {
     t.notOk(err, 'no error')
 
     t.deepEqual(key, {
-      publicBoxKey: base64.toByteArray('e5ecNjobMZJ564QyJVYBoqH0snU9brXFYH1v75RpMxs='),
-      publicBoxKeyBase64: 'e5ecNjobMZJ564QyJVYBoqH0snU9brXFYH1v75RpMxs=',
-      secretBoxKey: base64.toByteArray('w4mjtyfqrCvGqt3jLQFluCKloaZ4HyZ4QwrJRR50LIs='),
-      secretBoxKeyBase64: 'w4mjtyfqrCvGqt3jLQFluCKloaZ4HyZ4QwrJRR50LIs=',
-      publicSignKey: base64.toByteArray('Q9Ts3Uz6BcA3y4jVyaAjFaCE5HLyv9SHuDuklbQWmVQ='),
-      publicSignKeyBase64: 'Q9Ts3Uz6BcA3y4jVyaAjFaCE5HLyv9SHuDuklbQWmVQ=',
-      secretSignKey: base64.toByteArray('nXvLLFiIqECJ9pcRMdR6zX4X1Lw2o5taZPxFkLxDt+VD1OzdTPoFwDfLiNXJoCMVoITkcvK/1Ie4O6SVtBaZVA=='),
-      secretSignKeyBase64: 'nXvLLFiIqECJ9pcRMdR6zX4X1Lw2o5taZPxFkLxDt+VD1OzdTPoFwDfLiNXJoCMVoITkcvK/1Ie4O6SVtBaZVA=='
+      publicBoxKey: base64.toByteArray('EHfJ2sJJt7LjamnuJul6TlCb5SkgAwJI1PP7q95jh04='),
+      publicBoxKeyBase64: 'EHfJ2sJJt7LjamnuJul6TlCb5SkgAwJI1PP7q95jh04=',
+      secretBoxKey: base64.toByteArray('p6FU22u0423AcS0AKY6I+XeBTMDzQLX57XOH9Xg28pw='),
+      secretBoxKeyBase64: 'p6FU22u0423AcS0AKY6I+XeBTMDzQLX57XOH9Xg28pw=',
+      publicSignKey: base64.toByteArray('Fp5BVsrHfXRylmxaeIzPI8IUbJ+TzpX8sqFRAeFAAR0='),
+      publicSignKeyBase64: 'Fp5BVsrHfXRylmxaeIzPI8IUbJ+TzpX8sqFRAeFAAR0=',
+      secretSignKey: base64.toByteArray('8RBvdhPctH1OW49fCVOT9du8cIjf0T664FXEdml+ShAWnkFWysd9dHKWbFp4jM8jwhRsn5POlfyyoVEB4UABHQ=='),
+      secretSignKeyBase64: '8RBvdhPctH1OW49fCVOT9du8cIjf0T664FXEdml+ShAWnkFWysd9dHKWbFp4jM8jwhRsn5POlfyyoVEB4UABHQ=='
     }, 'correct v2 key has been calculated')
 
     t.end()

@@ -48,22 +48,11 @@ module.exports = function session (email, password, callback, version) {
   // old behaviors.
   if (version === undefined) version = 'v2'
 
-  if (version === 'v1') {
-    dkLen = 32
+  // The output length desired from scrypt in Bytes
+  dkLen = (version === 'v1') ? 32 : 64
 
-    // A 32 Byte BLAKE2s hash of the password bytes
-    scryptKey = blake.blake2s(nacl.util.decodeUTF8(password))
-  } else if (version === 'v2') {
-    dkLen = 64
-
-    // A 64 Byte BLAKE2b hash of the password string,
-    // keyed like an HMAC with the other args to this function
-    // to strengthen the Hash passed to scrypt. v2 passes
-    // 64 Bytes to scrypt and gets 64 Bytes of derived key material
-    // out of it as well.
-    var blakeHashKey = blake.blake2b([email, version].toString())
-    scryptKey = blake.blake2b(password, blakeHashKey)
-  }
+  // A 32 Byte BLAKE2s hash of the password bytes
+  scryptKey = blake.blake2s(nacl.util.decodeUTF8(password))
 
   getScryptKey(scryptKey, email, 17, 8, dkLen, 1000, function (scryptByteArray) {
     try {
