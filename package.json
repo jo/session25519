@@ -23,7 +23,7 @@
   "homepage": "https://github.com/jo/session25519",
   "dependencies": {
     "base64-js": "^1.1.1",
-    "blakejs": "^0.4.7",
+    "blake2s-js": "^1.0.3",
     "scrypt-async": "^1.2.0",
     "tweetnacl": "^0.14.0"
   },

@@ -1,5 +1,5 @@
 (function(f){if(typeof exports==="object"&&typeof module!=="undefined"){module.exports=f()}else if(typeof define==="function"&&define.amd){define([],f)}else{var g;if(typeof window!=="undefined"){g=window}else if(typeof global!=="undefined"){g=global}else if(typeof self!=="undefined"){g=self}else{g=this}g.session25519 = f()}})(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
-var blake = require('blakejs')
+var BLAKE2s = require('blake2s-js')
 var scrypt = require('scrypt-async')
 var nacl = require('tweetnacl')
 var base64 = require('base64-js')
@@ -48,7 +48,9 @@ module.exports = function session (email, password, callback) {
   'use strict'
 
   // A 32 Byte BLAKE2s hash of the password bytes
-  var scryptKey = blake.blake2s(decodeUTF8(password))
+  var keyHash = new BLAKE2s()
+  keyHash.update(decodeUTF8(password))
+  var scryptKey = keyHash.digest()
 
   getScryptKey(scryptKey, email, 17, 8, 64, 1000, function (scryptByteArray) {
     try {
@@ -80,7 +82,7 @@ module.exports = function session (email, password, callback) {
   })
 }
 
-},{"base64-js":2,"blakejs":5,"scrypt-async":11,"tweetnacl":12}],2:[function(require,module,exports){
+},{"base64-js":2,"blake2s-js":3,"scrypt-async":5,"tweetnacl":6}],2:[function(require,module,exports){
 'use strict'
 
 exports.toByteArray = toByteArray
@@ -197,2124 +199,1346 @@ function fromByteArray (uint8) {
 }
 
 },{}],3:[function(require,module,exports){
-// Blake2B in pure Javascript
-// Adapted from the reference implementation in RFC7693
-// Ported to Javascript by DC - https://github.com/dcposch
+var BLAKE2s = (function() {
 
-var util = require('./util')
+  var MAX_DIGEST_LENGTH = 32;
+  var BLOCK_LENGTH = 64;
+  var MAX_KEY_LENGTH = 32;
 
-// 64-bit unsigned addition
-// Sets v[a,a+1] += v[b,b+1]
-// v should be a Uint32Array
-function ADD64AA (v, a, b) {
-  var o0 = v[a] + v[b]
-  var o1 = v[a + 1] + v[b + 1]
-  if (o0 >= 0x100000000) {
-    o1++
-  }
-  v[a] = o0
-  v[a + 1] = o1
-}
+  var IV = new Uint32Array([
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+  ]);
 
-// 64-bit unsigned addition
-// Sets v[a,a+1] += b
-// b0 is the low 32 bits of b, b1 represents the high 32 bits
-function ADD64AC (v, a, b0, b1) {
-  var o0 = v[a] + b0
-  if (b0 < 0) {
-    o0 += 0x100000000
-  }
-  var o1 = v[a + 1] + b1
-  if (o0 >= 0x100000000) {
-    o1++
-  }
-  v[a] = o0
-  v[a + 1] = o1
-}
+  function BLAKE2s(digestLength, key) {
+    if (typeof digestLength === 'undefined')
+      digestLength = MAX_DIGEST_LENGTH;
 
-// Little-endian byte access
-function B2B_GET32 (arr, i) {
-  return (arr[i] ^
-  (arr[i + 1] << 8) ^
-  (arr[i + 2] << 16) ^
-  (arr[i + 3] << 24))
-}
+    if (digestLength <= 0 || digestLength > MAX_DIGEST_LENGTH)
+      throw new Error('bad digestLength');
 
-// G Mixing function
-// The ROTRs are inlined for speed
-function B2B_G (a, b, c, d, ix, iy) {
-  var x0 = m[ix]
-  var x1 = m[ix + 1]
-  var y0 = m[iy]
-  var y1 = m[iy + 1]
+    this.digestLength = digestLength;
 
-  ADD64AA(v, a, b) // v[a,a+1] += v[b,b+1] ... in JS we must store a uint64 as two uint32s
-  ADD64AC(v, a, x0, x1) // v[a, a+1] += x ... x0 is the low 32 bits of x, x1 is the high 32 bits
+    if (typeof key === 'string')
+      throw new TypeError('key must be a Uint8Array or an Array of bytes');
 
-  // v[d,d+1] = (v[d,d+1] xor v[a,a+1]) rotated to the right by 32 bits
-  var xor0 = v[d] ^ v[a]
-  var xor1 = v[d + 1] ^ v[a + 1]
-  v[d] = xor1
-  v[d + 1] = xor0
+    var keyLength = key ? key.length : 0;
+    if (keyLength > MAX_KEY_LENGTH) throw new Error('key is too long');
 
-  ADD64AA(v, c, d)
+    this.isFinished = false;
 
-  // v[b,b+1] = (v[b,b+1] xor v[c,c+1]) rotated right by 24 bits
-  xor0 = v[b] ^ v[c]
-  xor1 = v[b + 1] ^ v[c + 1]
-  v[b] = (xor0 >>> 24) ^ (xor1 << 8)
-  v[b + 1] = (xor1 >>> 24) ^ (xor0 << 8)
+    // Hash state.
+    this.h = new Uint32Array(IV);
 
-  ADD64AA(v, a, b)
-  ADD64AC(v, a, y0, y1)
+    // XOR part of parameter block.
+    var param = [digestLength & 0xff, keyLength, 1, 1];
+    this.h[0] ^= param[0] & 0xff | (param[1] & 0xff) << 8 | (param[2] & 0xff) << 16 | (param[3] & 0xff) << 24;
 
-  // v[d,d+1] = (v[d,d+1] xor v[a,a+1]) rotated right by 16 bits
-  xor0 = v[d] ^ v[a]
-  xor1 = v[d + 1] ^ v[a + 1]
-  v[d] = (xor0 >>> 16) ^ (xor1 << 16)
-  v[d + 1] = (xor1 >>> 16) ^ (xor0 << 16)
+    // Buffer for data.
+    this.x = new Uint8Array(BLOCK_LENGTH);
+    this.nx = 0;
 
-  ADD64AA(v, c, d)
+    // Byte counter.
+    this.t0 = 0;
+    this.t1 = 0;
 
-  // v[b,b+1] = (v[b,b+1] xor v[c,c+1]) rotated right by 63 bits
-  xor0 = v[b] ^ v[c]
-  xor1 = v[b + 1] ^ v[c + 1]
-  v[b] = (xor1 >>> 31) ^ (xor0 << 1)
-  v[b + 1] = (xor0 >>> 31) ^ (xor1 << 1)
-}
+    // Flags.
+    this.f0 = 0;
+    this.f1 = 0;
 
-// Initialization Vector
-var BLAKE2B_IV32 = new Uint32Array([
-  0xF3BCC908, 0x6A09E667, 0x84CAA73B, 0xBB67AE85,
-  0xFE94F82B, 0x3C6EF372, 0x5F1D36F1, 0xA54FF53A,
-  0xADE682D1, 0x510E527F, 0x2B3E6C1F, 0x9B05688C,
-  0xFB41BD6B, 0x1F83D9AB, 0x137E2179, 0x5BE0CD19
-])
-
-var SIGMA8 = [
-  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-  14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3,
-  11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4,
-  7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8,
-  9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13,
-  2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9,
-  12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11,
-  13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10,
-  6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5,
-  10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0,
-  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-  14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3
-]
-
-// These are offsets into a uint64 buffer.
-// Multiply them all by 2 to make them offsets into a uint32 buffer,
-// because this is Javascript and we don't have uint64s
-var SIGMA82 = new Uint8Array(SIGMA8.map(function (x) { return x * 2 }))
-
-// Compression function. 'last' flag indicates last block.
-// Note we're representing 16 uint64s as 32 uint32s
-var v = new Uint32Array(32)
-var m = new Uint32Array(32)
-function blake2b_compress (ctx, last) {
-  var i = 0
-
-  // init work variables
-  for (i = 0; i < 16; i++) {
-    v[i] = ctx.h[i]
-    v[i + 16] = BLAKE2B_IV32[i]
-  }
-
-  // low 64 bits of offset
-  v[24] = v[24] ^ ctx.t
-  v[25] = v[25] ^ (ctx.t / 0x100000000)
-  // high 64 bits not supported, offset may not be higher than 2**53-1
-
-  // last block flag set ?
-  if (last) {
-    v[28] = ~v[28]
-    v[29] = ~v[29]
-  }
-
-  // get little-endian words
-  for (i = 0; i < 32; i++) {
-    m[i] = B2B_GET32(ctx.b, 4 * i)
-  }
-
-  // twelve rounds of mixing
-  // uncomment the DebugPrint calls to log the computation
-  // and match the RFC sample documentation
-  // util.debugPrint('          m[16]', m, 64)
-  for (i = 0; i < 12; i++) {
-    // util.debugPrint('   (i=' + (i < 10 ? ' ' : '') + i + ') v[16]', v, 64)
-    B2B_G(0, 8, 16, 24, SIGMA82[i * 16 + 0], SIGMA82[i * 16 + 1])
-    B2B_G(2, 10, 18, 26, SIGMA82[i * 16 + 2], SIGMA82[i * 16 + 3])
-    B2B_G(4, 12, 20, 28, SIGMA82[i * 16 + 4], SIGMA82[i * 16 + 5])
-    B2B_G(6, 14, 22, 30, SIGMA82[i * 16 + 6], SIGMA82[i * 16 + 7])
-    B2B_G(0, 10, 20, 30, SIGMA82[i * 16 + 8], SIGMA82[i * 16 + 9])
-    B2B_G(2, 12, 22, 24, SIGMA82[i * 16 + 10], SIGMA82[i * 16 + 11])
-    B2B_G(4, 14, 16, 26, SIGMA82[i * 16 + 12], SIGMA82[i * 16 + 13])
-    B2B_G(6, 8, 18, 28, SIGMA82[i * 16 + 14], SIGMA82[i * 16 + 15])
-  }
-  // util.debugPrint('   (i=12) v[16]', v, 64)
-
-  for (i = 0; i < 16; i++) {
-    ctx.h[i] = ctx.h[i] ^ v[i] ^ v[i + 16]
-  }
-  // util.debugPrint('h[8]', ctx.h, 64)
-}
-
-// Creates a BLAKE2b hashing context
-// Requires an output length between 1 and 64 bytes
-// Takes an optional Uint8Array key
-function blake2b_init (outlen, key) {
-  if (outlen === 0 || outlen > 64) {
-    throw new Error('Illegal output length, expected 0 < length <= 64')
-  }
-  if (key && key.length > 64) {
-    throw new Error('Illegal key, expected Uint8Array with 0 < length <= 64')
-  }
-
-  // state, 'param block'
-  var ctx = {
-    b: new Uint8Array(128),
-    h: new Uint32Array(16),
-    t: 0, // input count
-    c: 0, // pointer within buffer
-    outlen: outlen // output length in bytes
-  }
-
-  // initialize hash state
-  for (var i = 0; i < 16; i++) {
-    ctx.h[i] = BLAKE2B_IV32[i]
-  }
-  var keylen = key ? key.length : 0
-  ctx.h[0] ^= 0x01010000 ^ (keylen << 8) ^ outlen
-
-  // key the hash, if applicable
-  if (key) {
-    blake2b_update(ctx, key)
-    // at the end
-    ctx.c = 128
-  }
-
-  return ctx
-}
-
-// Updates a BLAKE2b streaming hash
-// Requires hash context and Uint8Array (byte array)
-function blake2b_update (ctx, input) {
-  for (var i = 0; i < input.length; i++) {
-    if (ctx.c === 128) { // buffer full ?
-      ctx.t += ctx.c // add counters
-      blake2b_compress(ctx, false) // compress (not last)
-      ctx.c = 0 // counter to zero
-    }
-    ctx.b[ctx.c++] = input[i]
-  }
-}
-
-// Completes a BLAKE2b streaming hash
-// Returns a Uint8Array containing the message digest
-function blake2b_final (ctx) {
-  ctx.t += ctx.c // mark last block offset
-
-  while (ctx.c < 128) { // fill up with zeros
-    ctx.b[ctx.c++] = 0
-  }
-  blake2b_compress(ctx, true) // final block flag = 1
-
-  // little endian convert and store
-  var out = new Uint8Array(ctx.outlen)
-  for (var i = 0; i < ctx.outlen; i++) {
-    out[i] = ctx.h[i >> 2] >> (8 * (i & 3))
-  }
-  return out
-}
-
-// Computes the BLAKE2B hash of a string or byte array, and returns a Uint8Array
-//
-// Returns a n-byte Uint8Array
-//
-// Parameters:
-// - input - the input bytes, as a string, Buffer or Uint8Array
-// - key - optional key Uint8Array, up to 64 bytes
-// - outlen - optional output length in bytes, default 64
-function blake2b (input, key, outlen) {
-  // preprocess inputs
-  outlen = outlen || 64
-  input = util.normalizeInput(input)
-
-  // do the math
-  var ctx = blake2b_init(outlen, key)
-  blake2b_update(ctx, input)
-  return blake2b_final(ctx)
-}
-
-// Computes the BLAKE2B hash of a string or byte array
-//
-// Returns an n-byte hash in hex, all lowercase
-//
-// Parameters:
-// - input - the input bytes, as a string, Buffer, or Uint8Array
-// - key - optional key Uint8Array, up to 64 bytes
-// - outlen - optional output length in bytes, default 64
-function blake2bHex (input, key, outlen) {
-  var output = blake2b(input, key, outlen)
-  return util.toHex(output)
-}
-
-module.exports = {
-  blake2b: blake2b,
-  blake2bHex: blake2bHex,
-  blake2b_init: blake2b_init,
-  blake2b_update: blake2b_update,
-  blake2b_final: blake2b_final
-}
-
-},{"./util":6}],4:[function(require,module,exports){
-// BLAKE2s hash function in pure Javascript
-// Adapted from the reference implementation in RFC7693
-// Ported to Javascript by DC - https://github.com/dcposch
-
-var util = require('./util')
-
-// Little-endian byte access.
-// Expects a Uint8Array and an index
-// Returns the little-endian uint32 at v[i..i+3]
-function B2S_GET32 (v, i) {
-  return v[i] ^ (v[i + 1] << 8) ^ (v[i + 2] << 16) ^ (v[i + 3] << 24)
-}
-
-// Mixing function G.
-function B2S_G (a, b, c, d, x, y) {
-  v[a] = v[a] + v[b] + x
-  v[d] = ROTR32(v[d] ^ v[a], 16)
-  v[c] = v[c] + v[d]
-  v[b] = ROTR32(v[b] ^ v[c], 12)
-  v[a] = v[a] + v[b] + y
-  v[d] = ROTR32(v[d] ^ v[a], 8)
-  v[c] = v[c] + v[d]
-  v[b] = ROTR32(v[b] ^ v[c], 7)
-}
-
-// 32-bit right rotation
-// x should be a uint32
-// y must be between 1 and 31, inclusive
-function ROTR32 (x, y) {
-  return (x >>> y) ^ (x << (32 - y))
-}
-
-// Initialization Vector.
-var BLAKE2S_IV = new Uint32Array([
-  0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
-  0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19])
-
-var SIGMA = new Uint8Array([
-  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-  14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3,
-  11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4,
-  7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8,
-  9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13,
-  2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9,
-  12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11,
-  13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10,
-  6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5,
-  10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0])
-
-// Compression function. "last" flag indicates last block
-var v = new Uint32Array(16)
-var m = new Uint32Array(16)
-function blake2s_compress (ctx, last) {
-  var i = 0
-  for (i = 0; i < 8; i++) { // init work variables
-    v[i] = ctx.h[i]
-    v[i + 8] = BLAKE2S_IV[i]
-  }
-
-  v[12] ^= ctx.t // low 32 bits of offset
-  v[13] ^= (ctx.t / 0x100000000) // high 32 bits
-  if (last) { // last block flag set ?
-    v[14] = ~v[14]
-  }
-
-  for (i = 0; i < 16; i++) { // get little-endian words
-    m[i] = B2S_GET32(ctx.b, 4 * i)
-  }
-
-  // ten rounds of mixing
-  // uncomment the DebugPrint calls to log the computation
-  // and match the RFC sample documentation
-  // util.debugPrint('          m[16]', m, 32)
-  for (i = 0; i < 10; i++) {
-    // util.debugPrint('   (i=' + i + ')  v[16]', v, 32)
-    B2S_G(0, 4, 8, 12, m[SIGMA[i * 16 + 0]], m[SIGMA[i * 16 + 1]])
-    B2S_G(1, 5, 9, 13, m[SIGMA[i * 16 + 2]], m[SIGMA[i * 16 + 3]])
-    B2S_G(2, 6, 10, 14, m[SIGMA[i * 16 + 4]], m[SIGMA[i * 16 + 5]])
-    B2S_G(3, 7, 11, 15, m[SIGMA[i * 16 + 6]], m[SIGMA[i * 16 + 7]])
-    B2S_G(0, 5, 10, 15, m[SIGMA[i * 16 + 8]], m[SIGMA[i * 16 + 9]])
-    B2S_G(1, 6, 11, 12, m[SIGMA[i * 16 + 10]], m[SIGMA[i * 16 + 11]])
-    B2S_G(2, 7, 8, 13, m[SIGMA[i * 16 + 12]], m[SIGMA[i * 16 + 13]])
-    B2S_G(3, 4, 9, 14, m[SIGMA[i * 16 + 14]], m[SIGMA[i * 16 + 15]])
-  }
-  // util.debugPrint('   (i=10) v[16]', v, 32)
-
-  for (i = 0; i < 8; i++) {
-    ctx.h[i] ^= v[i] ^ v[i + 8]
-  }
-  // util.debugPrint('h[8]', ctx.h, 32)
-}
-
-// Creates a BLAKE2s hashing context
-// Requires an output length between 1 and 32 bytes
-// Takes an optional Uint8Array key
-function blake2s_init (outlen, key) {
-  if (!(outlen > 0 && outlen <= 32)) {
-    throw new Error('Incorrect output length, should be in [1, 32]')
-  }
-  var keylen = key ? key.length : 0
-  if (key && !(keylen > 0 && keylen <= 32)) {
-    throw new Error('Incorrect key length, should be in [1, 32]')
-  }
-
-  var ctx = {
-    h: new Uint32Array(BLAKE2S_IV), // hash state
-    b: new Uint32Array(64), // input block
-    c: 0, // pointer within block
-    t: 0, // input count
-    outlen: outlen // output length in bytes
-  }
-  ctx.h[0] ^= 0x01010000 ^ (keylen << 8) ^ outlen
-
-  if (keylen > 0) {
-    blake2s_update(ctx, key)
-    ctx.c = 64 // at the end
-  }
-
-  return ctx
-}
-
-// Updates a BLAKE2s streaming hash
-// Requires hash context and Uint8Array (byte array)
-function blake2s_update (ctx, input) {
-  for (var i = 0; i < input.length; i++) {
-    if (ctx.c === 64) { // buffer full ?
-      ctx.t += ctx.c // add counters
-      blake2s_compress(ctx, false) // compress (not last)
-      ctx.c = 0 // counter to zero
-    }
-    ctx.b[ctx.c++] = input[i]
-  }
-}
-
-// Completes a BLAKE2s streaming hash
-// Returns a Uint8Array containing the message digest
-function blake2s_final (ctx) {
-  ctx.t += ctx.c // mark last block offset
-  while (ctx.c < 64) { // fill up with zeros
-    ctx.b[ctx.c++] = 0
-  }
-  blake2s_compress(ctx, true) // final block flag = 1
-
-  // little endian convert and store
-  var out = new Uint8Array(ctx.outlen)
-  for (var i = 0; i < ctx.outlen; i++) {
-    out[i] = (ctx.h[i >> 2] >> (8 * (i & 3))) & 0xFF
-  }
-  return out
-}
-
-// Computes the BLAKE2S hash of a string or byte array, and returns a Uint8Array
-//
-// Returns a n-byte Uint8Array
-//
-// Parameters:
-// - input - the input bytes, as a string, Buffer, or Uint8Array
-// - key - optional key Uint8Array, up to 32 bytes
-// - outlen - optional output length in bytes, default 64
-function blake2s (input, key, outlen) {
-  // preprocess inputs
-  outlen = outlen || 32
-  input = util.normalizeInput(input)
-
-  // do the math
-  var ctx = blake2s_init(outlen, key)
-  blake2s_update(ctx, input)
-  return blake2s_final(ctx)
-}
-
-// Computes the BLAKE2S hash of a string or byte array
-//
-// Returns an n-byte hash in hex, all lowercase
-//
-// Parameters:
-// - input - the input bytes, as a string, Buffer, or Uint8Array
-// - key - optional key Uint8Array, up to 32 bytes
-// - outlen - optional output length in bytes, default 64
-function blake2sHex (input, key, outlen) {
-  var output = blake2s(input, key, outlen)
-  return util.toHex(output)
-}
-
-module.exports = {
-  blake2s: blake2s,
-  blake2sHex: blake2sHex,
-  blake2s_init: blake2s_init,
-  blake2s_update: blake2s_update,
-  blake2s_final: blake2s_final
-}
-
-},{"./util":6}],5:[function(require,module,exports){
-var b2b = require('./blake2b')
-var b2s = require('./blake2s')
-module.exports = Object.assign({}, b2b, b2s)
-
-},{"./blake2b":3,"./blake2s":4}],6:[function(require,module,exports){
-(function (Buffer){
-var ERROR_MSG_INPUT = 'Input must be an string, Buffer or Uint8Array'
-
-// For convenience, let people hash a string, not just a Uint8Array
-function normalizeInput (input) {
-  var ret
-  if (input instanceof Uint8Array) {
-    ret = input
-  } else if (input instanceof Buffer) {
-    ret = new Uint8Array(input)
-  } else if (typeof (input) === 'string') {
-    ret = new Uint8Array(new Buffer(input, 'utf8'))
-  } else {
-    throw new Error(ERROR_MSG_INPUT)
-  }
-  return ret
-}
-
-// Converts a Uint8Array to a hexadecimal string
-// For example, toHex([255, 0, 255]) returns "ff00ff"
-function toHex (bytes) {
-  return Array.prototype.map.call(bytes, function (n) {
-    return (n < 16 ? '0' : '') + n.toString(16)
-  }).join('')
-}
-
-// Converts any value in [0...2^32-1] to an 8-character hex string
-function uint32ToHex (val) {
-  return (0x100000000 + val).toString(16).substring(1)
-}
-
-// For debugging: prints out hash state in the same format as the RFC
-// sample computation exactly, so that you can diff
-function debugPrint (label, arr, size) {
-  var msg = '\n' + label + ' = '
-  for (var i = 0; i < arr.length; i += 2) {
-    if (size === 32) {
-      msg += uint32ToHex(arr[i]).toUpperCase()
-      msg += ' '
-      msg += uint32ToHex(arr[i + 1]).toUpperCase()
-    } else if (size === 64) {
-      msg += uint32ToHex(arr[i + 1]).toUpperCase()
-      msg += uint32ToHex(arr[i]).toUpperCase()
-    } else throw new Error('Invalid size ' + size)
-    if (i % 6 === 4) {
-      msg += '\n' + new Array(label.length + 4).join(' ')
-    } else if (i < arr.length - 2) {
-      msg += ' '
-    }
-  }
-  console.log(msg)
-}
-
-// For performance testing: generates N bytes of input, hashes M times
-// Measures and prints MB/second hash performance each time
-function testSpeed (hashFn, N, M) {
-  var startMs = new Date().getTime()
-
-  var input = new Uint8Array(N)
-  for (var i = 0; i < N; i++) {
-    input[i] = i % 256
-  }
-  var genMs = new Date().getTime()
-  console.log('Generated random input in ' + (genMs - startMs) + 'ms')
-  startMs = genMs
-
-  for (i = 0; i < M; i++) {
-    var hashHex = hashFn(input)
-    var hashMs = new Date().getTime()
-    var ms = hashMs - startMs
-    startMs = hashMs
-    console.log('Hashed in ' + ms + 'ms: ' + hashHex.substring(0, 20) + '...')
-    console.log(Math.round(N / (1 << 20) / (ms / 1000) * 100) / 100 + ' MB PER SECOND')
-  }
-}
-
-module.exports = {
-  normalizeInput: normalizeInput,
-  toHex: toHex,
-  debugPrint: debugPrint,
-  testSpeed: testSpeed
-}
-
-}).call(this,require("buffer").Buffer)
-},{"buffer":8}],7:[function(require,module,exports){
-
-},{}],8:[function(require,module,exports){
-(function (global){
-/*!
- * The buffer module from node.js, for the browser.
- *
- * @author   Feross Aboukhadijeh <feross@feross.org> <http://feross.org>
- * @license  MIT
- */
-/* eslint-disable no-proto */
-
-'use strict'
-
-var base64 = require('base64-js')
-var ieee754 = require('ieee754')
-var isArray = require('isarray')
-
-exports.Buffer = Buffer
-exports.SlowBuffer = SlowBuffer
-exports.INSPECT_MAX_BYTES = 50
-Buffer.poolSize = 8192 // not used by this implementation
-
-var rootParent = {}
-
-/**
- * If `Buffer.TYPED_ARRAY_SUPPORT`:
- *   === true    Use Uint8Array implementation (fastest)
- *   === false   Use Object implementation (most compatible, even IE6)
- *
- * Browsers that support typed arrays are IE 10+, Firefox 4+, Chrome 7+, Safari 5.1+,
- * Opera 11.6+, iOS 4.2+.
- *
- * Due to various browser bugs, sometimes the Object implementation will be used even
- * when the browser supports typed arrays.
- *
- * Note:
- *
- *   - Firefox 4-29 lacks support for adding new properties to `Uint8Array` instances,
- *     See: https://bugzilla.mozilla.org/show_bug.cgi?id=695438.
- *
- *   - Chrome 9-10 is missing the `TypedArray.prototype.subarray` function.
- *
- *   - IE10 has a broken `TypedArray.prototype.subarray` function which returns arrays of
- *     incorrect length in some situations.
-
- * We detect these buggy browsers and set `Buffer.TYPED_ARRAY_SUPPORT` to `false` so they
- * get the Object implementation, which is slower but behaves correctly.
- */
-Buffer.TYPED_ARRAY_SUPPORT = global.TYPED_ARRAY_SUPPORT !== undefined
-  ? global.TYPED_ARRAY_SUPPORT
-  : typedArraySupport()
-
-function typedArraySupport () {
-  try {
-    var arr = new Uint8Array(1)
-    arr.foo = function () { return 42 }
-    return arr.foo() === 42 && // typed array instances can be augmented
-        typeof arr.subarray === 'function' && // chrome 9-10 lack `subarray`
-        arr.subarray(1, 1).byteLength === 0 // ie10 has broken `subarray`
-  } catch (e) {
-    return false
-  }
-}
-
-function kMaxLength () {
-  return Buffer.TYPED_ARRAY_SUPPORT
-    ? 0x7fffffff
-    : 0x3fffffff
-}
-
-/**
- * The Buffer constructor returns instances of `Uint8Array` that have their
- * prototype changed to `Buffer.prototype`. Furthermore, `Buffer` is a subclass of
- * `Uint8Array`, so the returned instances will have all the node `Buffer` methods
- * and the `Uint8Array` methods. Square bracket notation works as expected -- it
- * returns a single octet.
- *
- * The `Uint8Array` prototype remains unmodified.
- */
-function Buffer (arg) {
-  if (!(this instanceof Buffer)) {
-    // Avoid going through an ArgumentsAdaptorTrampoline in the common case.
-    if (arguments.length > 1) return new Buffer(arg, arguments[1])
-    return new Buffer(arg)
-  }
-
-  if (!Buffer.TYPED_ARRAY_SUPPORT) {
-    this.length = 0
-    this.parent = undefined
-  }
-
-  // Common case.
-  if (typeof arg === 'number') {
-    return fromNumber(this, arg)
-  }
-
-  // Slightly less common case.
-  if (typeof arg === 'string') {
-    return fromString(this, arg, arguments.length > 1 ? arguments[1] : 'utf8')
-  }
-
-  // Unusual.
-  return fromObject(this, arg)
-}
-
-// TODO: Legacy, not needed anymore. Remove in next major version.
-Buffer._augment = function (arr) {
-  arr.__proto__ = Buffer.prototype
-  return arr
-}
-
-function fromNumber (that, length) {
-  that = allocate(that, length < 0 ? 0 : checked(length) | 0)
-  if (!Buffer.TYPED_ARRAY_SUPPORT) {
-    for (var i = 0; i < length; i++) {
-      that[i] = 0
-    }
-  }
-  return that
-}
-
-function fromString (that, string, encoding) {
-  if (typeof encoding !== 'string' || encoding === '') encoding = 'utf8'
-
-  // Assumption: byteLength() return value is always < kMaxLength.
-  var length = byteLength(string, encoding) | 0
-  that = allocate(that, length)
-
-  that.write(string, encoding)
-  return that
-}
-
-function fromObject (that, object) {
-  if (Buffer.isBuffer(object)) return fromBuffer(that, object)
-
-  if (isArray(object)) return fromArray(that, object)
-
-  if (object == null) {
-    throw new TypeError('must start with number, buffer, array or string')
-  }
-
-  if (typeof ArrayBuffer !== 'undefined') {
-    if (object.buffer instanceof ArrayBuffer) {
-      return fromTypedArray(that, object)
-    }
-    if (object instanceof ArrayBuffer) {
-      return fromArrayBuffer(that, object)
+    // Fill buffer with key, if present.
+    if (keyLength > 0) {
+      for (var i = 0; i < keyLength; i++) this.x[i] = key[i];
+      for (i = keyLength; i < BLOCK_LENGTH; i++) this.x[i] = 0;
+      this.nx = BLOCK_LENGTH;
     }
   }
 
-  if (object.length) return fromArrayLike(that, object)
-
-  return fromJsonObject(that, object)
-}
-
-function fromBuffer (that, buffer) {
-  var length = checked(buffer.length) | 0
-  that = allocate(that, length)
-  buffer.copy(that, 0, 0, length)
-  return that
-}
-
-function fromArray (that, array) {
-  var length = checked(array.length) | 0
-  that = allocate(that, length)
-  for (var i = 0; i < length; i += 1) {
-    that[i] = array[i] & 255
-  }
-  return that
-}
-
-// Duplicate of fromArray() to keep fromArray() monomorphic.
-function fromTypedArray (that, array) {
-  var length = checked(array.length) | 0
-  that = allocate(that, length)
-  // Truncating the elements is probably not what people expect from typed
-  // arrays with BYTES_PER_ELEMENT > 1 but it's compatible with the behavior
-  // of the old Buffer constructor.
-  for (var i = 0; i < length; i += 1) {
-    that[i] = array[i] & 255
-  }
-  return that
-}
-
-function fromArrayBuffer (that, array) {
-  array.byteLength // this throws if `array` is not a valid ArrayBuffer
-
-  if (Buffer.TYPED_ARRAY_SUPPORT) {
-    // Return an augmented `Uint8Array` instance, for best performance
-    that = new Uint8Array(array)
-    that.__proto__ = Buffer.prototype
-  } else {
-    // Fallback: Return an object instance of the Buffer class
-    that = fromTypedArray(that, new Uint8Array(array))
-  }
-  return that
-}
-
-function fromArrayLike (that, array) {
-  var length = checked(array.length) | 0
-  that = allocate(that, length)
-  for (var i = 0; i < length; i += 1) {
-    that[i] = array[i] & 255
-  }
-  return that
-}
-
-// Deserialize { type: 'Buffer', data: [1,2,3,...] } into a Buffer object.
-// Returns a zero-length buffer for inputs that don't conform to the spec.
-function fromJsonObject (that, object) {
-  var array
-  var length = 0
-
-  if (object.type === 'Buffer' && isArray(object.data)) {
-    array = object.data
-    length = checked(array.length) | 0
-  }
-  that = allocate(that, length)
-
-  for (var i = 0; i < length; i += 1) {
-    that[i] = array[i] & 255
-  }
-  return that
-}
-
-if (Buffer.TYPED_ARRAY_SUPPORT) {
-  Buffer.prototype.__proto__ = Uint8Array.prototype
-  Buffer.__proto__ = Uint8Array
-  if (typeof Symbol !== 'undefined' && Symbol.species &&
-      Buffer[Symbol.species] === Buffer) {
-    // Fix subarray() in ES2016. See: https://github.com/feross/buffer/pull/97
-    Object.defineProperty(Buffer, Symbol.species, {
-      value: null,
-      configurable: true
-    })
-  }
-} else {
-  // pre-set for values that may exist in the future
-  Buffer.prototype.length = undefined
-  Buffer.prototype.parent = undefined
-}
-
-function allocate (that, length) {
-  if (Buffer.TYPED_ARRAY_SUPPORT) {
-    // Return an augmented `Uint8Array` instance, for best performance
-    that = new Uint8Array(length)
-    that.__proto__ = Buffer.prototype
-  } else {
-    // Fallback: Return an object instance of the Buffer class
-    that.length = length
-  }
-
-  var fromPool = length !== 0 && length <= Buffer.poolSize >>> 1
-  if (fromPool) that.parent = rootParent
-
-  return that
-}
-
-function checked (length) {
-  // Note: cannot use `length < kMaxLength` here because that fails when
-  // length is NaN (which is otherwise coerced to zero.)
-  if (length >= kMaxLength()) {
-    throw new RangeError('Attempt to allocate Buffer larger than maximum ' +
-                         'size: 0x' + kMaxLength().toString(16) + ' bytes')
-  }
-  return length | 0
-}
-
-function SlowBuffer (subject, encoding) {
-  if (!(this instanceof SlowBuffer)) return new SlowBuffer(subject, encoding)
-
-  var buf = new Buffer(subject, encoding)
-  delete buf.parent
-  return buf
-}
-
-Buffer.isBuffer = function isBuffer (b) {
-  return !!(b != null && b._isBuffer)
-}
-
-Buffer.compare = function compare (a, b) {
-  if (!Buffer.isBuffer(a) || !Buffer.isBuffer(b)) {
-    throw new TypeError('Arguments must be Buffers')
-  }
-
-  if (a === b) return 0
-
-  var x = a.length
-  var y = b.length
-
-  var i = 0
-  var len = Math.min(x, y)
-  while (i < len) {
-    if (a[i] !== b[i]) break
-
-    ++i
-  }
-
-  if (i !== len) {
-    x = a[i]
-    y = b[i]
-  }
-
-  if (x < y) return -1
-  if (y < x) return 1
-  return 0
-}
-
-Buffer.isEncoding = function isEncoding (encoding) {
-  switch (String(encoding).toLowerCase()) {
-    case 'hex':
-    case 'utf8':
-    case 'utf-8':
-    case 'ascii':
-    case 'binary':
-    case 'base64':
-    case 'raw':
-    case 'ucs2':
-    case 'ucs-2':
-    case 'utf16le':
-    case 'utf-16le':
-      return true
-    default:
-      return false
-  }
-}
-
-Buffer.concat = function concat (list, length) {
-  if (!isArray(list)) throw new TypeError('list argument must be an Array of Buffers.')
-
-  if (list.length === 0) {
-    return new Buffer(0)
-  }
-
-  var i
-  if (length === undefined) {
-    length = 0
-    for (i = 0; i < list.length; i++) {
-      length += list[i].length
+  BLAKE2s.prototype.processBlock = function(length) {
+    this.t0 += length;
+    if (this.t0 != this.t0 >>> 0) {
+      this.t0 = 0;
+      this.t1++;
     }
-  }
 
-  var buf = new Buffer(length)
-  var pos = 0
-  for (i = 0; i < list.length; i++) {
-    var item = list[i]
-    item.copy(buf, pos)
-    pos += item.length
-  }
-  return buf
-}
+    var v0  = this.h[0],
+        v1  = this.h[1],
+        v2  = this.h[2],
+        v3  = this.h[3],
+        v4  = this.h[4],
+        v5  = this.h[5],
+        v6  = this.h[6],
+        v7  = this.h[7],
+        v8  = IV[0],
+        v9  = IV[1],
+        v10 = IV[2],
+        v11 = IV[3],
+        v12 = IV[4] ^ this.t0,
+        v13 = IV[5] ^ this.t1,
+        v14 = IV[6] ^ this.f0,
+        v15 = IV[7] ^ this.f1;
 
-function byteLength (string, encoding) {
-  if (typeof string !== 'string') string = '' + string
+    var x = this.x;
+    var m0  = x[ 0] & 0xff | (x[ 1] & 0xff) << 8 | (x[ 2] & 0xff) << 16 | (x[ 3] & 0xff) << 24,
+        m1  = x[ 4] & 0xff | (x[ 5] & 0xff) << 8 | (x[ 6] & 0xff) << 16 | (x[ 7] & 0xff) << 24,
+        m2  = x[ 8] & 0xff | (x[ 9] & 0xff) << 8 | (x[10] & 0xff) << 16 | (x[11] & 0xff) << 24,
+        m3  = x[12] & 0xff | (x[13] & 0xff) << 8 | (x[14] & 0xff) << 16 | (x[15] & 0xff) << 24,
+        m4  = x[16] & 0xff | (x[17] & 0xff) << 8 | (x[18] & 0xff) << 16 | (x[19] & 0xff) << 24,
+        m5  = x[20] & 0xff | (x[21] & 0xff) << 8 | (x[22] & 0xff) << 16 | (x[23] & 0xff) << 24,
+        m6  = x[24] & 0xff | (x[25] & 0xff) << 8 | (x[26] & 0xff) << 16 | (x[27] & 0xff) << 24,
+        m7  = x[28] & 0xff | (x[29] & 0xff) << 8 | (x[30] & 0xff) << 16 | (x[31] & 0xff) << 24,
+        m8  = x[32] & 0xff | (x[33] & 0xff) << 8 | (x[34] & 0xff) << 16 | (x[35] & 0xff) << 24,
+        m9  = x[36] & 0xff | (x[37] & 0xff) << 8 | (x[38] & 0xff) << 16 | (x[39] & 0xff) << 24,
+        m10 = x[40] & 0xff | (x[41] & 0xff) << 8 | (x[42] & 0xff) << 16 | (x[43] & 0xff) << 24,
+        m11 = x[44] & 0xff | (x[45] & 0xff) << 8 | (x[46] & 0xff) << 16 | (x[47] & 0xff) << 24,
+        m12 = x[48] & 0xff | (x[49] & 0xff) << 8 | (x[50] & 0xff) << 16 | (x[51] & 0xff) << 24,
+        m13 = x[52] & 0xff | (x[53] & 0xff) << 8 | (x[54] & 0xff) << 16 | (x[55] & 0xff) << 24,
+        m14 = x[56] & 0xff | (x[57] & 0xff) << 8 | (x[58] & 0xff) << 16 | (x[59] & 0xff) << 24,
+        m15 = x[60] & 0xff | (x[61] & 0xff) << 8 | (x[62] & 0xff) << 16 | (x[63] & 0xff) << 24;
 
-  var len = string.length
-  if (len === 0) return 0
+    // Round 1.
+    v0 += m0;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v1 += m2;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v2 += m4;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v3 += m6;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v2 += m5;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v3 += m7;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v1 += m3;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
+    v0 += m1;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v0 += m8;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v1 += m10;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v2 += m12;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v3 += m14;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v2 += m13;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v3 += m15;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v1 += m11;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v0 += m9;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
 
-  // Use a for loop to avoid recursion
-  var loweredCase = false
-  for (;;) {
-    switch (encoding) {
-      case 'ascii':
-      case 'binary':
-      // Deprecated
-      case 'raw':
-      case 'raws':
-        return len
-      case 'utf8':
-      case 'utf-8':
-        return utf8ToBytes(string).length
-      case 'ucs2':
-      case 'ucs-2':
-      case 'utf16le':
-      case 'utf-16le':
-        return len * 2
-      case 'hex':
-        return len >>> 1
-      case 'base64':
-        return base64ToBytes(string).length
-      default:
-        if (loweredCase) return utf8ToBytes(string).length // assume utf8
-        encoding = ('' + encoding).toLowerCase()
-        loweredCase = true
-    }
-  }
-}
-Buffer.byteLength = byteLength
+    // Round 2.
+    v0 += m14;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v1 += m4;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v2 += m9;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v3 += m13;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v2 += m15;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v3 += m6;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v1 += m8;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
+    v0 += m10;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v0 += m1;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v1 += m0;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v2 += m11;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v3 += m5;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v2 += m7;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v3 += m3;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v1 += m2;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v0 += m12;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
 
-function slowToString (encoding, start, end) {
-  var loweredCase = false
+    // Round 3.
+    v0 += m11;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v1 += m12;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v2 += m5;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v3 += m15;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v2 += m2;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v3 += m13;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v1 += m0;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
+    v0 += m8;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v0 += m10;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v1 += m3;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v2 += m7;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v3 += m9;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v2 += m1;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v3 += m4;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v1 += m6;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v0 += m14;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
 
-  start = start | 0
-  end = end === undefined || end === Infinity ? this.length : end | 0
+    // Round 4.
+    v0 += m7;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v1 += m3;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v2 += m13;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v3 += m11;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v2 += m12;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v3 += m14;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v1 += m1;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
+    v0 += m9;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v0 += m2;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v1 += m5;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v2 += m4;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v3 += m15;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v2 += m0;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v3 += m8;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v1 += m10;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v0 += m6;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
 
-  if (!encoding) encoding = 'utf8'
-  if (start < 0) start = 0
-  if (end > this.length) end = this.length
-  if (end <= start) return ''
+    // Round 5.
+    v0 += m9;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v1 += m5;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v2 += m2;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v3 += m10;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v2 += m4;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v3 += m15;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v1 += m7;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
+    v0 += m0;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v0 += m14;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v1 += m11;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v2 += m6;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v3 += m3;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v2 += m8;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v3 += m13;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v1 += m12;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v0 += m1;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
 
-  while (true) {
-    switch (encoding) {
-      case 'hex':
-        return hexSlice(this, start, end)
+    // Round 6.
+    v0 += m2;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v1 += m6;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v2 += m0;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v3 += m8;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v2 += m11;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v3 += m3;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v1 += m10;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
+    v0 += m12;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v0 += m4;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v1 += m7;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v2 += m15;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v3 += m1;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v2 += m14;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v3 += m9;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v1 += m5;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v0 += m13;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
 
-      case 'utf8':
-      case 'utf-8':
-        return utf8Slice(this, start, end)
+    // Round 7.
+    v0 += m12;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v1 += m1;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v2 += m14;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v3 += m4;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v2 += m13;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v3 += m10;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v1 += m15;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
+    v0 += m5;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v0 += m0;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v1 += m6;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v2 += m9;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v3 += m8;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v2 += m2;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v3 += m11;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v1 += m3;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v0 += m7;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
 
-      case 'ascii':
-        return asciiSlice(this, start, end)
+    // Round 8.
+    v0 += m13;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v1 += m7;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v2 += m12;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v3 += m3;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v2 += m1;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v3 += m9;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v1 += m14;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
+    v0 += m11;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v0 += m5;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v1 += m15;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v2 += m8;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v3 += m2;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v2 += m6;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v3 += m10;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v1 += m4;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v0 += m0;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
 
-      case 'binary':
-        return binarySlice(this, start, end)
+    // Round 9.
+    v0 += m6;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v1 += m14;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v2 += m11;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v3 += m0;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v2 += m3;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v3 += m8;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v1 += m9;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
+    v0 += m15;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v0 += m12;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v1 += m13;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v2 += m1;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v3 += m10;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v2 += m4;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v3 += m5;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v1 += m7;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v0 += m2;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
 
-      case 'base64':
-        return base64Slice(this, start, end)
+    // Round 10.
+    v0 += m10;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v1 += m8;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v2 += m7;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v3 += m1;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v2 += m6;
+    v2 += v6;
+    v14 ^= v2;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v10 += v14;
+    v6 ^= v10;
+    v6 = v6 << (32 - 7) | v6 >>> 7;
+    v3 += m5;
+    v3 += v7;
+    v15 ^= v3;
+    v15 = v15 << (32 - 8) | v15 >>> 8;
+    v11 += v15;
+    v7 ^= v11;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v1 += m4;
+    v1 += v5;
+    v13 ^= v1;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v9 += v13;
+    v5 ^= v9;
+    v5 = v5 << (32 - 7) | v5 >>> 7;
+    v0 += m2;
+    v0 += v4;
+    v12 ^= v0;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v8 += v12;
+    v4 ^= v8;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v0 += m15;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = v15 << (32 - 16) | v15 >>> 16;
+    v10 += v15;
+    v5 ^= v10;
+    v5 = v5 << (32 - 12) | v5 >>> 12;
+    v1 += m9;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 16) | v12 >>> 16;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = v6 << (32 - 12) | v6 >>> 12;
+    v2 += m3;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 16) | v13 >>> 16;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 12) | v7 >>> 12;
+    v3 += m13;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 16) | v14 >>> 16;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 12) | v4 >>> 12;
+    v2 += m12;
+    v2 += v7;
+    v13 ^= v2;
+    v13 = v13 << (32 - 8) | v13 >>> 8;
+    v8 += v13;
+    v7 ^= v8;
+    v7 = v7 << (32 - 7) | v7 >>> 7;
+    v3 += m0;
+    v3 += v4;
+    v14 ^= v3;
+    v14 = v14 << (32 - 8) | v14 >>> 8;
+    v9 += v14;
+    v4 ^= v9;
+    v4 = v4 << (32 - 7) | v4 >>> 7;
+    v1 += m14;
+    v1 += v6;
+    v12 ^= v1;
+    v12 = v12 << (32 - 8) | v12 >>> 8;
+    v11 += v12;
+    v6 ^= v11;
+    v6 = (v6 << (32 - 7)) | (v6 >>> 7);
+    v0 += m11;
+    v0 += v5;
+    v15 ^= v0;
+    v15 = (v15 << (32 - 8)) | (v15 >>> 8);
+    v10 += v15;
+    v5 ^= v10;
+    v5 = (v5 << (32 - 7)) | (v5 >>> 7);
 
-      case 'ucs2':
-      case 'ucs-2':
-      case 'utf16le':
-      case 'utf-16le':
-        return utf16leSlice(this, start, end)
+    this.h[0] ^= v0 ^ v8;
+    this.h[1] ^= v1 ^ v9;
+    this.h[2] ^= v2 ^ v10;
+    this.h[3] ^= v3 ^ v11;
+    this.h[4] ^= v4 ^ v12;
+    this.h[5] ^= v5 ^ v13;
+    this.h[6] ^= v6 ^ v14;
+    this.h[7] ^= v7 ^ v15;
+  };
 
-      default:
-        if (loweredCase) throw new TypeError('Unknown encoding: ' + encoding)
-        encoding = (encoding + '').toLowerCase()
-        loweredCase = true
-    }
-  }
-}
+  BLAKE2s.prototype.update = function(p, offset, length) {
+    if (typeof p === 'string')
+      throw new TypeError('update() accepts Uint8Array or an Array of bytes');
+    if (this.isFinished)
+      throw new Error('update() after calling digest()');
 
-// The property is used by `Buffer.isBuffer` and `is-buffer` (in Safari 5-7) to detect
-// Buffer instances.
-Buffer.prototype._isBuffer = true
+    if (typeof offset === 'undefined') { offset = 0; }
+    if (typeof length === 'undefined') { length = p.length - offset; }
 
-Buffer.prototype.toString = function toString () {
-  var length = this.length | 0
-  if (length === 0) return ''
-  if (arguments.length === 0) return utf8Slice(this, 0, length)
-  return slowToString.apply(this, arguments)
-}
+    if (length === 0) return;
 
-Buffer.prototype.equals = function equals (b) {
-  if (!Buffer.isBuffer(b)) throw new TypeError('Argument must be a Buffer')
-  if (this === b) return true
-  return Buffer.compare(this, b) === 0
-}
 
-Buffer.prototype.inspect = function inspect () {
-  var str = ''
-  var max = exports.INSPECT_MAX_BYTES
-  if (this.length > 0) {
-    str = this.toString('hex', 0, max).match(/.{2}/g).join(' ')
-    if (this.length > max) str += ' ... '
-  }
-  return '<Buffer ' + str + '>'
-}
+    var i, left = 64 - this.nx;
 
-Buffer.prototype.compare = function compare (b) {
-  if (!Buffer.isBuffer(b)) throw new TypeError('Argument must be a Buffer')
-  if (this === b) return 0
-  return Buffer.compare(this, b)
-}
-
-Buffer.prototype.indexOf = function indexOf (val, byteOffset) {
-  if (byteOffset > 0x7fffffff) byteOffset = 0x7fffffff
-  else if (byteOffset < -0x80000000) byteOffset = -0x80000000
-  byteOffset >>= 0
-
-  if (this.length === 0) return -1
-  if (byteOffset >= this.length) return -1
-
-  // Negative offsets start from the end of the buffer
-  if (byteOffset < 0) byteOffset = Math.max(this.length + byteOffset, 0)
-
-  if (typeof val === 'string') {
-    if (val.length === 0) return -1 // special case: looking for empty string always fails
-    return String.prototype.indexOf.call(this, val, byteOffset)
-  }
-  if (Buffer.isBuffer(val)) {
-    return arrayIndexOf(this, val, byteOffset)
-  }
-  if (typeof val === 'number') {
-    if (Buffer.TYPED_ARRAY_SUPPORT && Uint8Array.prototype.indexOf === 'function') {
-      return Uint8Array.prototype.indexOf.call(this, val, byteOffset)
-    }
-    return arrayIndexOf(this, [ val ], byteOffset)
-  }
-
-  function arrayIndexOf (arr, val, byteOffset) {
-    var foundIndex = -1
-    for (var i = 0; byteOffset + i < arr.length; i++) {
-      if (arr[byteOffset + i] === val[foundIndex === -1 ? 0 : i - foundIndex]) {
-        if (foundIndex === -1) foundIndex = i
-        if (i - foundIndex + 1 === val.length) return byteOffset + foundIndex
-      } else {
-        foundIndex = -1
+    // Finish buffer.
+    if (length > left) {
+      for (i = 0; i < left; i++) {
+        this.x[this.nx + i] = p[offset + i];
       }
+      this.processBlock(64);
+      offset += left;
+      length -= left;
+      this.nx = 0;
     }
-    return -1
-  }
 
-  throw new TypeError('val must be string, number or Buffer')
-}
-
-function hexWrite (buf, string, offset, length) {
-  offset = Number(offset) || 0
-  var remaining = buf.length - offset
-  if (!length) {
-    length = remaining
-  } else {
-    length = Number(length)
-    if (length > remaining) {
-      length = remaining
-    }
-  }
-
-  // must be an even number of digits
-  var strLen = string.length
-  if (strLen % 2 !== 0) throw new Error('Invalid hex string')
-
-  if (length > strLen / 2) {
-    length = strLen / 2
-  }
-  for (var i = 0; i < length; i++) {
-    var parsed = parseInt(string.substr(i * 2, 2), 16)
-    if (isNaN(parsed)) throw new Error('Invalid hex string')
-    buf[offset + i] = parsed
-  }
-  return i
-}
-
-function utf8Write (buf, string, offset, length) {
-  return blitBuffer(utf8ToBytes(string, buf.length - offset), buf, offset, length)
-}
-
-function asciiWrite (buf, string, offset, length) {
-  return blitBuffer(asciiToBytes(string), buf, offset, length)
-}
-
-function binaryWrite (buf, string, offset, length) {
-  return asciiWrite(buf, string, offset, length)
-}
-
-function base64Write (buf, string, offset, length) {
-  return blitBuffer(base64ToBytes(string), buf, offset, length)
-}
-
-function ucs2Write (buf, string, offset, length) {
-  return blitBuffer(utf16leToBytes(string, buf.length - offset), buf, offset, length)
-}
-
-Buffer.prototype.write = function write (string, offset, length, encoding) {
-  // Buffer#write(string)
-  if (offset === undefined) {
-    encoding = 'utf8'
-    length = this.length
-    offset = 0
-  // Buffer#write(string, encoding)
-  } else if (length === undefined && typeof offset === 'string') {
-    encoding = offset
-    length = this.length
-    offset = 0
-  // Buffer#write(string, offset[, length][, encoding])
-  } else if (isFinite(offset)) {
-    offset = offset | 0
-    if (isFinite(length)) {
-      length = length | 0
-      if (encoding === undefined) encoding = 'utf8'
-    } else {
-      encoding = length
-      length = undefined
-    }
-  // legacy write(string, encoding, offset, length) - remove in v0.13
-  } else {
-    var swap = encoding
-    encoding = offset
-    offset = length | 0
-    length = swap
-  }
-
-  var remaining = this.length - offset
-  if (length === undefined || length > remaining) length = remaining
-
-  if ((string.length > 0 && (length < 0 || offset < 0)) || offset > this.length) {
-    throw new RangeError('attempt to write outside buffer bounds')
-  }
-
-  if (!encoding) encoding = 'utf8'
-
-  var loweredCase = false
-  for (;;) {
-    switch (encoding) {
-      case 'hex':
-        return hexWrite(this, string, offset, length)
-
-      case 'utf8':
-      case 'utf-8':
-        return utf8Write(this, string, offset, length)
-
-      case 'ascii':
-        return asciiWrite(this, string, offset, length)
-
-      case 'binary':
-        return binaryWrite(this, string, offset, length)
-
-      case 'base64':
-        // Warning: maxLength not taken into account in base64Write
-        return base64Write(this, string, offset, length)
-
-      case 'ucs2':
-      case 'ucs-2':
-      case 'utf16le':
-      case 'utf-16le':
-        return ucs2Write(this, string, offset, length)
-
-      default:
-        if (loweredCase) throw new TypeError('Unknown encoding: ' + encoding)
-        encoding = ('' + encoding).toLowerCase()
-        loweredCase = true
-    }
-  }
-}
-
-Buffer.prototype.toJSON = function toJSON () {
-  return {
-    type: 'Buffer',
-    data: Array.prototype.slice.call(this._arr || this, 0)
-  }
-}
-
-function base64Slice (buf, start, end) {
-  if (start === 0 && end === buf.length) {
-    return base64.fromByteArray(buf)
-  } else {
-    return base64.fromByteArray(buf.slice(start, end))
-  }
-}
-
-function utf8Slice (buf, start, end) {
-  end = Math.min(buf.length, end)
-  var res = []
-
-  var i = start
-  while (i < end) {
-    var firstByte = buf[i]
-    var codePoint = null
-    var bytesPerSequence = (firstByte > 0xEF) ? 4
-      : (firstByte > 0xDF) ? 3
-      : (firstByte > 0xBF) ? 2
-      : 1
-
-    if (i + bytesPerSequence <= end) {
-      var secondByte, thirdByte, fourthByte, tempCodePoint
-
-      switch (bytesPerSequence) {
-        case 1:
-          if (firstByte < 0x80) {
-            codePoint = firstByte
-          }
-          break
-        case 2:
-          secondByte = buf[i + 1]
-          if ((secondByte & 0xC0) === 0x80) {
-            tempCodePoint = (firstByte & 0x1F) << 0x6 | (secondByte & 0x3F)
-            if (tempCodePoint > 0x7F) {
-              codePoint = tempCodePoint
-            }
-          }
-          break
-        case 3:
-          secondByte = buf[i + 1]
-          thirdByte = buf[i + 2]
-          if ((secondByte & 0xC0) === 0x80 && (thirdByte & 0xC0) === 0x80) {
-            tempCodePoint = (firstByte & 0xF) << 0xC | (secondByte & 0x3F) << 0x6 | (thirdByte & 0x3F)
-            if (tempCodePoint > 0x7FF && (tempCodePoint < 0xD800 || tempCodePoint > 0xDFFF)) {
-              codePoint = tempCodePoint
-            }
-          }
-          break
-        case 4:
-          secondByte = buf[i + 1]
-          thirdByte = buf[i + 2]
-          fourthByte = buf[i + 3]
-          if ((secondByte & 0xC0) === 0x80 && (thirdByte & 0xC0) === 0x80 && (fourthByte & 0xC0) === 0x80) {
-            tempCodePoint = (firstByte & 0xF) << 0x12 | (secondByte & 0x3F) << 0xC | (thirdByte & 0x3F) << 0x6 | (fourthByte & 0x3F)
-            if (tempCodePoint > 0xFFFF && tempCodePoint < 0x110000) {
-              codePoint = tempCodePoint
-            }
-          }
+    // Process message blocks.
+    while (length > 64) {
+      for (i = 0; i < 64; i++) {
+        this.x[i] = p[offset + i];
       }
+      this.processBlock(64);
+      offset += 64;
+      length -= 64;
+      this.nx = 0;
     }
 
-    if (codePoint === null) {
-      // we did not generate a valid codePoint so insert a
-      // replacement char (U+FFFD) and advance only 1 byte
-      codePoint = 0xFFFD
-      bytesPerSequence = 1
-    } else if (codePoint > 0xFFFF) {
-      // encode to utf16 (surrogate pair dance)
-      codePoint -= 0x10000
-      res.push(codePoint >>> 10 & 0x3FF | 0xD800)
-      codePoint = 0xDC00 | codePoint & 0x3FF
+    // Copy leftovers to buffer.
+    for (i = 0; i < length; i++) {
+      this.x[this.nx + i] = p[offset + i];
     }
+    this.nx += length;
+  };
 
-    res.push(codePoint)
-    i += bytesPerSequence
-  }
+  BLAKE2s.prototype.digest = function() {
+    var i;
 
-  return decodeCodePointsArray(res)
-}
+    if (this.isFinished) return this.result;
 
-// Based on http://stackoverflow.com/a/22747272/680742, the browser with
-// the lowest limit is Chrome, with 0x10000 args.
-// We go 1 magnitude less, for safety
-var MAX_ARGUMENTS_LENGTH = 0x1000
+    for (i = this.nx; i < 64; i++) this.x[i] = 0;
 
-function decodeCodePointsArray (codePoints) {
-  var len = codePoints.length
-  if (len <= MAX_ARGUMENTS_LENGTH) {
-    return String.fromCharCode.apply(String, codePoints) // avoid extra slice()
-  }
+    // Set last block flag.
+    this.f0 = 0xffffffff;
 
-  // Decode in chunks to avoid "call stack size exceeded".
-  var res = ''
-  var i = 0
-  while (i < len) {
-    res += String.fromCharCode.apply(
-      String,
-      codePoints.slice(i, i += MAX_ARGUMENTS_LENGTH)
-    )
-  }
-  return res
-}
+    //TODO in tree mode, set f1 to 0xffffffff.
+    this.processBlock(this.nx);
 
-function asciiSlice (buf, start, end) {
-  var ret = ''
-  end = Math.min(buf.length, end)
-
-  for (var i = start; i < end; i++) {
-    ret += String.fromCharCode(buf[i] & 0x7F)
-  }
-  return ret
-}
-
-function binarySlice (buf, start, end) {
-  var ret = ''
-  end = Math.min(buf.length, end)
-
-  for (var i = start; i < end; i++) {
-    ret += String.fromCharCode(buf[i])
-  }
-  return ret
-}
-
-function hexSlice (buf, start, end) {
-  var len = buf.length
-
-  if (!start || start < 0) start = 0
-  if (!end || end < 0 || end > len) end = len
-
-  var out = ''
-  for (var i = start; i < end; i++) {
-    out += toHex(buf[i])
-  }
-  return out
-}
-
-function utf16leSlice (buf, start, end) {
-  var bytes = buf.slice(start, end)
-  var res = ''
-  for (var i = 0; i < bytes.length; i += 2) {
-    res += String.fromCharCode(bytes[i] + bytes[i + 1] * 256)
-  }
-  return res
-}
-
-Buffer.prototype.slice = function slice (start, end) {
-  var len = this.length
-  start = ~~start
-  end = end === undefined ? len : ~~end
-
-  if (start < 0) {
-    start += len
-    if (start < 0) start = 0
-  } else if (start > len) {
-    start = len
-  }
-
-  if (end < 0) {
-    end += len
-    if (end < 0) end = 0
-  } else if (end > len) {
-    end = len
-  }
-
-  if (end < start) end = start
-
-  var newBuf
-  if (Buffer.TYPED_ARRAY_SUPPORT) {
-    newBuf = this.subarray(start, end)
-    newBuf.__proto__ = Buffer.prototype
-  } else {
-    var sliceLen = end - start
-    newBuf = new Buffer(sliceLen, undefined)
-    for (var i = 0; i < sliceLen; i++) {
-      newBuf[i] = this[i + start]
+    var d = new Uint8Array(32);
+    for (i = 0; i < 8; i++) {
+      var h = this.h[i];
+      d[i * 4 + 0] = (h >>> 0) & 0xff;
+      d[i * 4 + 1] = (h >>> 8) & 0xff;
+      d[i * 4 + 2] = (h >>> 16) & 0xff;
+      d[i * 4 + 3] = (h >>> 24) & 0xff;
     }
-  }
-
-  if (newBuf.length) newBuf.parent = this.parent || this
-
-  return newBuf
-}
-
-/*
- * Need to make sure that buffer isn't trying to write out of bounds.
- */
-function checkOffset (offset, ext, length) {
-  if ((offset % 1) !== 0 || offset < 0) throw new RangeError('offset is not uint')
-  if (offset + ext > length) throw new RangeError('Trying to access beyond buffer length')
-}
-
-Buffer.prototype.readUIntLE = function readUIntLE (offset, byteLength, noAssert) {
-  offset = offset | 0
-  byteLength = byteLength | 0
-  if (!noAssert) checkOffset(offset, byteLength, this.length)
-
-  var val = this[offset]
-  var mul = 1
-  var i = 0
-  while (++i < byteLength && (mul *= 0x100)) {
-    val += this[offset + i] * mul
-  }
-
-  return val
-}
-
-Buffer.prototype.readUIntBE = function readUIntBE (offset, byteLength, noAssert) {
-  offset = offset | 0
-  byteLength = byteLength | 0
-  if (!noAssert) {
-    checkOffset(offset, byteLength, this.length)
-  }
-
-  var val = this[offset + --byteLength]
-  var mul = 1
-  while (byteLength > 0 && (mul *= 0x100)) {
-    val += this[offset + --byteLength] * mul
-  }
-
-  return val
-}
-
-Buffer.prototype.readUInt8 = function readUInt8 (offset, noAssert) {
-  if (!noAssert) checkOffset(offset, 1, this.length)
-  return this[offset]
-}
-
-Buffer.prototype.readUInt16LE = function readUInt16LE (offset, noAssert) {
-  if (!noAssert) checkOffset(offset, 2, this.length)
-  return this[offset] | (this[offset + 1] << 8)
-}
-
-Buffer.prototype.readUInt16BE = function readUInt16BE (offset, noAssert) {
-  if (!noAssert) checkOffset(offset, 2, this.length)
-  return (this[offset] << 8) | this[offset + 1]
-}
-
-Buffer.prototype.readUInt32LE = function readUInt32LE (offset, noAssert) {
-  if (!noAssert) checkOffset(offset, 4, this.length)
-
-  return ((this[offset]) |
-      (this[offset + 1] << 8) |
-      (this[offset + 2] << 16)) +
-      (this[offset + 3] * 0x1000000)
-}
-
-Buffer.prototype.readUInt32BE = function readUInt32BE (offset, noAssert) {
-  if (!noAssert) checkOffset(offset, 4, this.length)
-
-  return (this[offset] * 0x1000000) +
-    ((this[offset + 1] << 16) |
-    (this[offset + 2] << 8) |
-    this[offset + 3])
-}
-
-Buffer.prototype.readIntLE = function readIntLE (offset, byteLength, noAssert) {
-  offset = offset | 0
-  byteLength = byteLength | 0
-  if (!noAssert) checkOffset(offset, byteLength, this.length)
-
-  var val = this[offset]
-  var mul = 1
-  var i = 0
-  while (++i < byteLength && (mul *= 0x100)) {
-    val += this[offset + i] * mul
-  }
-  mul *= 0x80
-
-  if (val >= mul) val -= Math.pow(2, 8 * byteLength)
-
-  return val
-}
-
-Buffer.prototype.readIntBE = function readIntBE (offset, byteLength, noAssert) {
-  offset = offset | 0
-  byteLength = byteLength | 0
-  if (!noAssert) checkOffset(offset, byteLength, this.length)
-
-  var i = byteLength
-  var mul = 1
-  var val = this[offset + --i]
-  while (i > 0 && (mul *= 0x100)) {
-    val += this[offset + --i] * mul
-  }
-  mul *= 0x80
-
-  if (val >= mul) val -= Math.pow(2, 8 * byteLength)
-
-  return val
-}
-
-Buffer.prototype.readInt8 = function readInt8 (offset, noAssert) {
-  if (!noAssert) checkOffset(offset, 1, this.length)
-  if (!(this[offset] & 0x80)) return (this[offset])
-  return ((0xff - this[offset] + 1) * -1)
-}
-
-Buffer.prototype.readInt16LE = function readInt16LE (offset, noAssert) {
-  if (!noAssert) checkOffset(offset, 2, this.length)
-  var val = this[offset] | (this[offset + 1] << 8)
-  return (val & 0x8000) ? val | 0xFFFF0000 : val
-}
-
-Buffer.prototype.readInt16BE = function readInt16BE (offset, noAssert) {
-  if (!noAssert) checkOffset(offset, 2, this.length)
-  var val = this[offset + 1] | (this[offset] << 8)
-  return (val & 0x8000) ? val | 0xFFFF0000 : val
-}
-
-Buffer.prototype.readInt32LE = function readInt32LE (offset, noAssert) {
-  if (!noAssert) checkOffset(offset, 4, this.length)
-
-  return (this[offset]) |
-    (this[offset + 1] << 8) |
-    (this[offset + 2] << 16) |
-    (this[offset + 3] << 24)
-}
-
-Buffer.prototype.readInt32BE = function readInt32BE (offset, noAssert) {
-  if (!noAssert) checkOffset(offset, 4, this.length)
-
-  return (this[offset] << 24) |
-    (this[offset + 1] << 16) |
-    (this[offset + 2] << 8) |
-    (this[offset + 3])
-}
-
-Buffer.prototype.readFloatLE = function readFloatLE (offset, noAssert) {
-  if (!noAssert) checkOffset(offset, 4, this.length)
-  return ieee754.read(this, offset, true, 23, 4)
-}
-
-Buffer.prototype.readFloatBE = function readFloatBE (offset, noAssert) {
-  if (!noAssert) checkOffset(offset, 4, this.length)
-  return ieee754.read(this, offset, false, 23, 4)
-}
-
-Buffer.prototype.readDoubleLE = function readDoubleLE (offset, noAssert) {
-  if (!noAssert) checkOffset(offset, 8, this.length)
-  return ieee754.read(this, offset, true, 52, 8)
-}
-
-Buffer.prototype.readDoubleBE = function readDoubleBE (offset, noAssert) {
-  if (!noAssert) checkOffset(offset, 8, this.length)
-  return ieee754.read(this, offset, false, 52, 8)
-}
-
-function checkInt (buf, value, offset, ext, max, min) {
-  if (!Buffer.isBuffer(buf)) throw new TypeError('buffer must be a Buffer instance')
-  if (value > max || value < min) throw new RangeError('value is out of bounds')
-  if (offset + ext > buf.length) throw new RangeError('index out of range')
-}
-
-Buffer.prototype.writeUIntLE = function writeUIntLE (value, offset, byteLength, noAssert) {
-  value = +value
-  offset = offset | 0
-  byteLength = byteLength | 0
-  if (!noAssert) checkInt(this, value, offset, byteLength, Math.pow(2, 8 * byteLength), 0)
-
-  var mul = 1
-  var i = 0
-  this[offset] = value & 0xFF
-  while (++i < byteLength && (mul *= 0x100)) {
-    this[offset + i] = (value / mul) & 0xFF
-  }
-
-  return offset + byteLength
-}
-
-Buffer.prototype.writeUIntBE = function writeUIntBE (value, offset, byteLength, noAssert) {
-  value = +value
-  offset = offset | 0
-  byteLength = byteLength | 0
-  if (!noAssert) checkInt(this, value, offset, byteLength, Math.pow(2, 8 * byteLength), 0)
-
-  var i = byteLength - 1
-  var mul = 1
-  this[offset + i] = value & 0xFF
-  while (--i >= 0 && (mul *= 0x100)) {
-    this[offset + i] = (value / mul) & 0xFF
-  }
-
-  return offset + byteLength
-}
-
-Buffer.prototype.writeUInt8 = function writeUInt8 (value, offset, noAssert) {
-  value = +value
-  offset = offset | 0
-  if (!noAssert) checkInt(this, value, offset, 1, 0xff, 0)
-  if (!Buffer.TYPED_ARRAY_SUPPORT) value = Math.floor(value)
-  this[offset] = (value & 0xff)
-  return offset + 1
-}
-
-function objectWriteUInt16 (buf, value, offset, littleEndian) {
-  if (value < 0) value = 0xffff + value + 1
-  for (var i = 0, j = Math.min(buf.length - offset, 2); i < j; i++) {
-    buf[offset + i] = (value & (0xff << (8 * (littleEndian ? i : 1 - i)))) >>>
-      (littleEndian ? i : 1 - i) * 8
-  }
-}
-
-Buffer.prototype.writeUInt16LE = function writeUInt16LE (value, offset, noAssert) {
-  value = +value
-  offset = offset | 0
-  if (!noAssert) checkInt(this, value, offset, 2, 0xffff, 0)
-  if (Buffer.TYPED_ARRAY_SUPPORT) {
-    this[offset] = (value & 0xff)
-    this[offset + 1] = (value >>> 8)
-  } else {
-    objectWriteUInt16(this, value, offset, true)
-  }
-  return offset + 2
-}
-
-Buffer.prototype.writeUInt16BE = function writeUInt16BE (value, offset, noAssert) {
-  value = +value
-  offset = offset | 0
-  if (!noAssert) checkInt(this, value, offset, 2, 0xffff, 0)
-  if (Buffer.TYPED_ARRAY_SUPPORT) {
-    this[offset] = (value >>> 8)
-    this[offset + 1] = (value & 0xff)
-  } else {
-    objectWriteUInt16(this, value, offset, false)
-  }
-  return offset + 2
-}
-
-function objectWriteUInt32 (buf, value, offset, littleEndian) {
-  if (value < 0) value = 0xffffffff + value + 1
-  for (var i = 0, j = Math.min(buf.length - offset, 4); i < j; i++) {
-    buf[offset + i] = (value >>> (littleEndian ? i : 3 - i) * 8) & 0xff
-  }
-}
-
-Buffer.prototype.writeUInt32LE = function writeUInt32LE (value, offset, noAssert) {
-  value = +value
-  offset = offset | 0
-  if (!noAssert) checkInt(this, value, offset, 4, 0xffffffff, 0)
-  if (Buffer.TYPED_ARRAY_SUPPORT) {
-    this[offset + 3] = (value >>> 24)
-    this[offset + 2] = (value >>> 16)
-    this[offset + 1] = (value >>> 8)
-    this[offset] = (value & 0xff)
-  } else {
-    objectWriteUInt32(this, value, offset, true)
-  }
-  return offset + 4
-}
-
-Buffer.prototype.writeUInt32BE = function writeUInt32BE (value, offset, noAssert) {
-  value = +value
-  offset = offset | 0
-  if (!noAssert) checkInt(this, value, offset, 4, 0xffffffff, 0)
-  if (Buffer.TYPED_ARRAY_SUPPORT) {
-    this[offset] = (value >>> 24)
-    this[offset + 1] = (value >>> 16)
-    this[offset + 2] = (value >>> 8)
-    this[offset + 3] = (value & 0xff)
-  } else {
-    objectWriteUInt32(this, value, offset, false)
-  }
-  return offset + 4
-}
-
-Buffer.prototype.writeIntLE = function writeIntLE (value, offset, byteLength, noAssert) {
-  value = +value
-  offset = offset | 0
-  if (!noAssert) {
-    var limit = Math.pow(2, 8 * byteLength - 1)
-
-    checkInt(this, value, offset, byteLength, limit - 1, -limit)
-  }
-
-  var i = 0
-  var mul = 1
-  var sub = value < 0 ? 1 : 0
-  this[offset] = value & 0xFF
-  while (++i < byteLength && (mul *= 0x100)) {
-    this[offset + i] = ((value / mul) >> 0) - sub & 0xFF
-  }
-
-  return offset + byteLength
-}
-
-Buffer.prototype.writeIntBE = function writeIntBE (value, offset, byteLength, noAssert) {
-  value = +value
-  offset = offset | 0
-  if (!noAssert) {
-    var limit = Math.pow(2, 8 * byteLength - 1)
-
-    checkInt(this, value, offset, byteLength, limit - 1, -limit)
-  }
-
-  var i = byteLength - 1
-  var mul = 1
-  var sub = value < 0 ? 1 : 0
-  this[offset + i] = value & 0xFF
-  while (--i >= 0 && (mul *= 0x100)) {
-    this[offset + i] = ((value / mul) >> 0) - sub & 0xFF
-  }
-
-  return offset + byteLength
-}
-
-Buffer.prototype.writeInt8 = function writeInt8 (value, offset, noAssert) {
-  value = +value
-  offset = offset | 0
-  if (!noAssert) checkInt(this, value, offset, 1, 0x7f, -0x80)
-  if (!Buffer.TYPED_ARRAY_SUPPORT) value = Math.floor(value)
-  if (value < 0) value = 0xff + value + 1
-  this[offset] = (value & 0xff)
-  return offset + 1
-}
-
-Buffer.prototype.writeInt16LE = function writeInt16LE (value, offset, noAssert) {
-  value = +value
-  offset = offset | 0
-  if (!noAssert) checkInt(this, value, offset, 2, 0x7fff, -0x8000)
-  if (Buffer.TYPED_ARRAY_SUPPORT) {
-    this[offset] = (value & 0xff)
-    this[offset + 1] = (value >>> 8)
-  } else {
-    objectWriteUInt16(this, value, offset, true)
-  }
-  return offset + 2
-}
-
-Buffer.prototype.writeInt16BE = function writeInt16BE (value, offset, noAssert) {
-  value = +value
-  offset = offset | 0
-  if (!noAssert) checkInt(this, value, offset, 2, 0x7fff, -0x8000)
-  if (Buffer.TYPED_ARRAY_SUPPORT) {
-    this[offset] = (value >>> 8)
-    this[offset + 1] = (value & 0xff)
-  } else {
-    objectWriteUInt16(this, value, offset, false)
-  }
-  return offset + 2
-}
-
-Buffer.prototype.writeInt32LE = function writeInt32LE (value, offset, noAssert) {
-  value = +value
-  offset = offset | 0
-  if (!noAssert) checkInt(this, value, offset, 4, 0x7fffffff, -0x80000000)
-  if (Buffer.TYPED_ARRAY_SUPPORT) {
-    this[offset] = (value & 0xff)
-    this[offset + 1] = (value >>> 8)
-    this[offset + 2] = (value >>> 16)
-    this[offset + 3] = (value >>> 24)
-  } else {
-    objectWriteUInt32(this, value, offset, true)
-  }
-  return offset + 4
-}
-
-Buffer.prototype.writeInt32BE = function writeInt32BE (value, offset, noAssert) {
-  value = +value
-  offset = offset | 0
-  if (!noAssert) checkInt(this, value, offset, 4, 0x7fffffff, -0x80000000)
-  if (value < 0) value = 0xffffffff + value + 1
-  if (Buffer.TYPED_ARRAY_SUPPORT) {
-    this[offset] = (value >>> 24)
-    this[offset + 1] = (value >>> 16)
-    this[offset + 2] = (value >>> 8)
-    this[offset + 3] = (value & 0xff)
-  } else {
-    objectWriteUInt32(this, value, offset, false)
-  }
-  return offset + 4
-}
-
-function checkIEEE754 (buf, value, offset, ext, max, min) {
-  if (offset + ext > buf.length) throw new RangeError('index out of range')
-  if (offset < 0) throw new RangeError('index out of range')
-}
-
-function writeFloat (buf, value, offset, littleEndian, noAssert) {
-  if (!noAssert) {
-    checkIEEE754(buf, value, offset, 4, 3.4028234663852886e+38, -3.4028234663852886e+38)
-  }
-  ieee754.write(buf, value, offset, littleEndian, 23, 4)
-  return offset + 4
-}
-
-Buffer.prototype.writeFloatLE = function writeFloatLE (value, offset, noAssert) {
-  return writeFloat(this, value, offset, true, noAssert)
-}
-
-Buffer.prototype.writeFloatBE = function writeFloatBE (value, offset, noAssert) {
-  return writeFloat(this, value, offset, false, noAssert)
-}
-
-function writeDouble (buf, value, offset, littleEndian, noAssert) {
-  if (!noAssert) {
-    checkIEEE754(buf, value, offset, 8, 1.7976931348623157E+308, -1.7976931348623157E+308)
-  }
-  ieee754.write(buf, value, offset, littleEndian, 52, 8)
-  return offset + 8
-}
-
-Buffer.prototype.writeDoubleLE = function writeDoubleLE (value, offset, noAssert) {
-  return writeDouble(this, value, offset, true, noAssert)
-}
-
-Buffer.prototype.writeDoubleBE = function writeDoubleBE (value, offset, noAssert) {
-  return writeDouble(this, value, offset, false, noAssert)
-}
-
-// copy(targetBuffer, targetStart=0, sourceStart=0, sourceEnd=buffer.length)
-Buffer.prototype.copy = function copy (target, targetStart, start, end) {
-  if (!start) start = 0
-  if (!end && end !== 0) end = this.length
-  if (targetStart >= target.length) targetStart = target.length
-  if (!targetStart) targetStart = 0
-  if (end > 0 && end < start) end = start
-
-  // Copy 0 bytes; we're done
-  if (end === start) return 0
-  if (target.length === 0 || this.length === 0) return 0
-
-  // Fatal error conditions
-  if (targetStart < 0) {
-    throw new RangeError('targetStart out of bounds')
-  }
-  if (start < 0 || start >= this.length) throw new RangeError('sourceStart out of bounds')
-  if (end < 0) throw new RangeError('sourceEnd out of bounds')
-
-  // Are we oob?
-  if (end > this.length) end = this.length
-  if (target.length - targetStart < end - start) {
-    end = target.length - targetStart + start
-  }
-
-  var len = end - start
-  var i
-
-  if (this === target && start < targetStart && targetStart < end) {
-    // descending copy from end
-    for (i = len - 1; i >= 0; i--) {
-      target[i + targetStart] = this[i + start]
+    this.result = new Uint8Array(d.subarray(0, this.digestLength));
+    this.isFinished = true;
+    return this.result;
+  };
+
+  BLAKE2s.prototype.hexDigest = function() {
+    var hex = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'];
+    var out = [];
+    var d = this.digest();
+    for (var i = 0; i < d.length; i++) {
+      out.push(hex[(d[i] >> 4) & 0xf]);
+      out.push(hex[d[i] & 0xf]);
     }
-  } else if (len < 1000 || !Buffer.TYPED_ARRAY_SUPPORT) {
-    // ascending copy from start
-    for (i = 0; i < len; i++) {
-      target[i + targetStart] = this[i + start]
-    }
-  } else {
-    Uint8Array.prototype.set.call(
-      target,
-      this.subarray(start, start + len),
-      targetStart
-    )
-  }
+    return out.join('');
+  };
 
-  return len
-}
+  BLAKE2s.digestLength = MAX_DIGEST_LENGTH;
+  BLAKE2s.blockLength = BLOCK_LENGTH;
+  BLAKE2s.keyLength = MAX_KEY_LENGTH;
 
-// fill(value, start=0, end=buffer.length)
-Buffer.prototype.fill = function fill (value, start, end) {
-  if (!value) value = 0
-  if (!start) start = 0
-  if (!end) end = this.length
+  return BLAKE2s;
 
-  if (end < start) throw new RangeError('end < start')
+})();
 
-  // Fill 0 bytes; we're done
-  if (end === start) return
-  if (this.length === 0) return
+if (typeof module !== 'undefined' && module.exports) module.exports = BLAKE2s;
 
-  if (start < 0 || start >= this.length) throw new RangeError('start out of bounds')
-  if (end < 0 || end > this.length) throw new RangeError('end out of bounds')
+},{}],4:[function(require,module,exports){
 
-  var i
-  if (typeof value === 'number') {
-    for (i = start; i < end; i++) {
-      this[i] = value
-    }
-  } else {
-    var bytes = utf8ToBytes(value.toString())
-    var len = bytes.length
-    for (i = start; i < end; i++) {
-      this[i] = bytes[i % len]
-    }
-  }
-
-  return this
-}
-
-// HELPER FUNCTIONS
-// ================
-
-var INVALID_BASE64_RE = /[^+\/0-9A-Za-z-_]/g
-
-function base64clean (str) {
-  // Node strips out invalid characters like \n and \t from the string, base64-js does not
-  str = stringtrim(str).replace(INVALID_BASE64_RE, '')
-  // Node converts strings with length < 2 to ''
-  if (str.length < 2) return ''
-  // Node allows for non-padded base64 strings (missing trailing ===), base64-js does not
-  while (str.length % 4 !== 0) {
-    str = str + '='
-  }
-  return str
-}
-
-function stringtrim (str) {
-  if (str.trim) return str.trim()
-  return str.replace(/^\s+|\s+$/g, '')
-}
-
-function toHex (n) {
-  if (n < 16) return '0' + n.toString(16)
-  return n.toString(16)
-}
-
-function utf8ToBytes (string, units) {
-  units = units || Infinity
-  var codePoint
-  var length = string.length
-  var leadSurrogate = null
-  var bytes = []
-
-  for (var i = 0; i < length; i++) {
-    codePoint = string.charCodeAt(i)
-
-    // is surrogate component
-    if (codePoint > 0xD7FF && codePoint < 0xE000) {
-      // last char was a lead
-      if (!leadSurrogate) {
-        // no lead yet
-        if (codePoint > 0xDBFF) {
-          // unexpected trail
-          if ((units -= 3) > -1) bytes.push(0xEF, 0xBF, 0xBD)
-          continue
-        } else if (i + 1 === length) {
-          // unpaired lead
-          if ((units -= 3) > -1) bytes.push(0xEF, 0xBF, 0xBD)
-          continue
-        }
-
-        // valid lead
-        leadSurrogate = codePoint
-
-        continue
-      }
-
-      // 2 leads in a row
-      if (codePoint < 0xDC00) {
-        if ((units -= 3) > -1) bytes.push(0xEF, 0xBF, 0xBD)
-        leadSurrogate = codePoint
-        continue
-      }
-
-      // valid surrogate pair
-      codePoint = (leadSurrogate - 0xD800 << 10 | codePoint - 0xDC00) + 0x10000
-    } else if (leadSurrogate) {
-      // valid bmp char, but last char was a lead
-      if ((units -= 3) > -1) bytes.push(0xEF, 0xBF, 0xBD)
-    }
-
-    leadSurrogate = null
-
-    // encode utf8
-    if (codePoint < 0x80) {
-      if ((units -= 1) < 0) break
-      bytes.push(codePoint)
-    } else if (codePoint < 0x800) {
-      if ((units -= 2) < 0) break
-      bytes.push(
-        codePoint >> 0x6 | 0xC0,
-        codePoint & 0x3F | 0x80
-      )
-    } else if (codePoint < 0x10000) {
-      if ((units -= 3) < 0) break
-      bytes.push(
-        codePoint >> 0xC | 0xE0,
-        codePoint >> 0x6 & 0x3F | 0x80,
-        codePoint & 0x3F | 0x80
-      )
-    } else if (codePoint < 0x110000) {
-      if ((units -= 4) < 0) break
-      bytes.push(
-        codePoint >> 0x12 | 0xF0,
-        codePoint >> 0xC & 0x3F | 0x80,
-        codePoint >> 0x6 & 0x3F | 0x80,
-        codePoint & 0x3F | 0x80
-      )
-    } else {
-      throw new Error('Invalid code point')
-    }
-  }
-
-  return bytes
-}
-
-function asciiToBytes (str) {
-  var byteArray = []
-  for (var i = 0; i < str.length; i++) {
-    // Node's code seems to be doing this and not & 0x7F..
-    byteArray.push(str.charCodeAt(i) & 0xFF)
-  }
-  return byteArray
-}
-
-function utf16leToBytes (str, units) {
-  var c, hi, lo
-  var byteArray = []
-  for (var i = 0; i < str.length; i++) {
-    if ((units -= 2) < 0) break
-
-    c = str.charCodeAt(i)
-    hi = c >> 8
-    lo = c % 256
-    byteArray.push(lo)
-    byteArray.push(hi)
-  }
-
-  return byteArray
-}
-
-function base64ToBytes (str) {
-  return base64.toByteArray(base64clean(str))
-}
-
-function blitBuffer (src, dst, offset, length) {
-  for (var i = 0; i < length; i++) {
-    if ((i + offset >= dst.length) || (i >= src.length)) break
-    dst[i + offset] = src[i]
-  }
-  return i
-}
-
-}).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"base64-js":2,"ieee754":10,"isarray":9}],9:[function(require,module,exports){
-var toString = {}.toString;
-
-module.exports = Array.isArray || function (arr) {
-  return toString.call(arr) == '[object Array]';
-};
-
-},{}],10:[function(require,module,exports){
-exports.read = function (buffer, offset, isLE, mLen, nBytes) {
-  var e, m
-  var eLen = nBytes * 8 - mLen - 1
-  var eMax = (1 << eLen) - 1
-  var eBias = eMax >> 1
-  var nBits = -7
-  var i = isLE ? (nBytes - 1) : 0
-  var d = isLE ? -1 : 1
-  var s = buffer[offset + i]
-
-  i += d
-
-  e = s & ((1 << (-nBits)) - 1)
-  s >>= (-nBits)
-  nBits += eLen
-  for (; nBits > 0; e = e * 256 + buffer[offset + i], i += d, nBits -= 8) {}
-
-  m = e & ((1 << (-nBits)) - 1)
-  e >>= (-nBits)
-  nBits += mLen
-  for (; nBits > 0; m = m * 256 + buffer[offset + i], i += d, nBits -= 8) {}
-
-  if (e === 0) {
-    e = 1 - eBias
-  } else if (e === eMax) {
-    return m ? NaN : ((s ? -1 : 1) * Infinity)
-  } else {
-    m = m + Math.pow(2, mLen)
-    e = e - eBias
-  }
-  return (s ? -1 : 1) * m * Math.pow(2, e - mLen)
-}
-
-exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
-  var e, m, c
-  var eLen = nBytes * 8 - mLen - 1
-  var eMax = (1 << eLen) - 1
-  var eBias = eMax >> 1
-  var rt = (mLen === 23 ? Math.pow(2, -24) - Math.pow(2, -77) : 0)
-  var i = isLE ? 0 : (nBytes - 1)
-  var d = isLE ? 1 : -1
-  var s = value < 0 || (value === 0 && 1 / value < 0) ? 1 : 0
-
-  value = Math.abs(value)
-
-  if (isNaN(value) || value === Infinity) {
-    m = isNaN(value) ? 1 : 0
-    e = eMax
-  } else {
-    e = Math.floor(Math.log(value) / Math.LN2)
-    if (value * (c = Math.pow(2, -e)) < 1) {
-      e--
-      c *= 2
-    }
-    if (e + eBias >= 1) {
-      value += rt / c
-    } else {
-      value += rt * Math.pow(2, 1 - eBias)
-    }
-    if (value * c >= 2) {
-      e++
-      c /= 2
-    }
-
-    if (e + eBias >= eMax) {
-      m = 0
-      e = eMax
-    } else if (e + eBias >= 1) {
-      m = (value * c - 1) * Math.pow(2, mLen)
-      e = e + eBias
-    } else {
-      m = value * Math.pow(2, eBias - 1) * Math.pow(2, mLen)
-      e = 0
-    }
-  }
-
-  for (; mLen >= 8; buffer[offset + i] = m & 0xff, i += d, m /= 256, mLen -= 8) {}
-
-  e = (e << mLen) | m
-  eLen += mLen
-  for (; eLen > 0; buffer[offset + i] = e & 0xff, i += d, e /= 256, eLen -= 8) {}
-
-  buffer[offset + i - d] |= s * 128
-}
-
-},{}],11:[function(require,module,exports){
+},{}],5:[function(require,module,exports){
 /*!
  * Fast "async" scrypt implementation in JavaScript.
  * Copyright (c) 2013-2015 Dmitry Chestnykh | BSD License
@@ -2796,7 +2020,7 @@ function scrypt(password, salt, logN, r, dkLen, interruptStep, callback, encodin
 
 if (typeof module !== 'undefined') module.exports = scrypt;
 
-},{}],12:[function(require,module,exports){
+},{}],6:[function(require,module,exports){
 (function(nacl) {
 'use strict';
 
@@ -5186,5 +4410,5 @@ nacl.setPRNG = function(fn) {
 
 })(typeof module !== 'undefined' && module.exports ? module.exports : (self.nacl = self.nacl || {}));
 
-},{"crypto":7}]},{},[1])(1)
+},{"crypto":4}]},{},[1])(1)
 });

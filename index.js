@@ -1,4 +1,4 @@
-var blake = require('blakejs')
+var BLAKE2s = require('blake2s-js')
 var scrypt = require('scrypt-async')
 var nacl = require('tweetnacl')
 var base64 = require('base64-js')
@@ -47,7 +47,9 @@ module.exports = function session (email, password, callback) {
   'use strict'
 
   // A 32 Byte BLAKE2s hash of the password bytes
-  var scryptKey = blake.blake2s(decodeUTF8(password))
+  var keyHash = new BLAKE2s()
+  keyHash.update(decodeUTF8(password))
+  var scryptKey = keyHash.digest()
 
   getScryptKey(scryptKey, email, 17, 8, 64, 1000, function (scryptByteArray) {
     try {

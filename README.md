@@ -118,9 +118,9 @@ using `setImmediate`:
 
 ## Resources
 
-### BLAKE.js
-- Origin: https://github.com/dcposch/blakejs
-- License: Creative Commons CC0
+### BLAKE2s-js
+- Origin: https://github.com/dchest/blake2s-js
+- License: Public Domain
 
 ### scrypt-async-js
 - Origin: https://github.com/dchest/scrypt-async-js
