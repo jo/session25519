@@ -1,11 +1,18 @@
 var blake = require('blakejs')
 var scrypt = require('scrypt-async')
 var nacl = require('tweetnacl')
-nacl.util = require('tweetnacl-util') // needed only for v1
 var base64 = require('base64-js')
 
 // Code inspired by:
 // https://github.com/kaepora/miniLock/blob/master/src/js/miniLock.js
+
+// Extracted from tweetnacl-util-js
+// https://github.com/dchest/tweetnacl-util-js/blob/master/nacl-util.js#L16
+function decodeUTF8 (s) {
+  var i, d = unescape(encodeURIComponent(s)), b = new Uint8Array(d.length)
+  for (i = 0; i < d.length; i++) b[i] = d.charCodeAt(i)
+  return b
+}
 
 // Input:
 //   key                      // User key hash (Uint8Array)
@@ -51,7 +58,7 @@ module.exports = function session (email, password, callback, version) {
   dkLen = (version === 'v1') ? 32 : 64
 
   // A 32 Byte BLAKE2s hash of the password bytes
-  scryptKey = blake.blake2s(nacl.util.decodeUTF8(password))
+  scryptKey = blake.blake2s(decodeUTF8(password))
 
   getScryptKey(scryptKey, email, 17, 8, dkLen, 1000, function (scryptByteArray) {
     try {
