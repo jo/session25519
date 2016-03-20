@@ -37,27 +37,22 @@ the overall security of the system.
 
 ## Version `v1` versus `v2`
 
-There are two versions of this function that you can call, `v1` and `v2`. `v1` is
-the original version (before there was a version). If you are upgrading from
+There are two versions of this function that you can call, `v1` and `v2`.
+
+`v1` is the original version (before there was a version). If you are upgrading from
 version `1.x.x` of this package you will want to specify the `v1` arg.  If you
 do not, the keys generated will not be the same deterministic keypair you would
 expect for a given user ID and password. If you specify `v1`, which is backwards
 compatible, everything should behave identically to before.
 
-The new `v2` version enhances the security of the system, and provides an
-additional key pair. The hash of the password is now a 64 Byte (vs. 32B in v1)
-`BLAKE2b` hash (vs. `BLAKE2s` in `v1`). This hash is alse keyed, like an HMAC,
-with the BLAKE2b hash of the email and version args passed as a key to the
-password hashing function.
-
-The `scrypt` key derivation function in `v2` will now also return 64 Bytes
+The `scrypt` key derivation function in `v2` will now return 64 Bytes
 of derived key material (vs. 32B in `v1`). The first 32B are used to seed the
 `nacl.box.keyPair.fromSecretKey()` function, and the second 32B are used to seed
 the `nacl.sign.keyPair.fromSeed()` function. So now you get two full sets of keys
 returned.  One for encryption, and one for digital signatures. These keys are all
 returned as `Uint8Array` objects and can be used directly by TweetNaCL.js.
 For convenience, a Base64 encoded version of each key is also returned
-in the Object Literal.
+in the Object literal.
 
 ## Usage
 
@@ -122,7 +117,7 @@ logN              = 17   // CPU/memory cost parameter (1 to 31)
 r                 = 8    // block size parameter
 dkLen             = 32   // length of derived key
 
-// 32 Byte key material
+// Returns 32 Bytes of key material
 encryptionKeySeed = scrypt(key, salt, logN, r, dkLen)
 keyPair           = nacl.box.keyPair.fromSecretKey(encryptionKeySeed)
 ```
@@ -130,17 +125,16 @@ keyPair           = nacl.box.keyPair.fromSecretKey(encryptionKeySeed)
 ### `v2`
 
 ```js
-// A 64 Byte hash of the password keyed w/ a 64 Byte hash of args
-key               = BLAKE2b(password, BLAKE2b(email, version))
+key               = BLAKE2s(password) // A 32 Byte hash of the password
 salt              = email
 logN              = 17   // CPU/memory cost parameter (1 to 31)
 r                 = 8    // block size parameter
 dkLen             = 64   // length of derived key
 
-// 64 Byte key material
+// Returns 64 Bytes of key material
 derivedBytes      = scrypt(key, salt, logN, r, dkLen)
 
-// Split the 64 Bytes of key material into two 32 Byte arrays
+// Split the 64 Bytes of key material into two 32 Byte sub-arrays
 encryptKeySeed    = derivedBytes[0, 32]
 signKeySeed       = derivedBytes[32, 64]
 
@@ -199,3 +193,9 @@ npm run build
 ```sh
 npm test
 ```
+
+## Thanks
+
+Thanks to Dmitry Chestnykh ([@dchest](https://github.com/dchest)) for the
+awesome TweetNaCL.js code and for providing a code review and security guidance
+on the implementation of this code.
