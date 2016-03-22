@@ -35,9 +35,9 @@ and measured with password strength estimation tools like
 [zxcvbn](https://github.com/dropbox/zxcvbn) are critically important to
 the overall security of the system.
 
-## Version 2.x.x Changes
+## Version 1.1.x Changes
 
-In version 2.x.x of this package the `scrypt` key derivation was changed from
+In version 1.1.x of this package the `scrypt` key derivation was changed from
 32 Bytes of output to 64 Bytes. The first 32 Bytes remain the same as before when
 used as a seed for generating encryption keys. The extra 32 Bytes now being
 derived are used to seed the generation of a TweetNaCL digital signature
