@@ -1,11 +1,11 @@
 {
   "name": "session25519",
-  "version": "1.0.0",
-  "description": "Derive curve25519 key pair from username/password via scrypt.",
+  "version": "1.1.0",
+  "description": "Derive Curve25519 encryption keys and ed25519 signing keys from username and password via BLAKE2b hash and scrypt.",
   "main": "index.js",
   "scripts": {
     "test": "node test.js | tap-spec",
-    "build": "browserify ./ > dist/session25519.js"
+    "build": "browserify index.js --standalone session25519 > dist/session25519.js"
   },
   "repository": {
     "type": "git",
@@ -22,13 +22,14 @@
   },
   "homepage": "https://github.com/jo/session25519",
   "dependencies": {
+    "base64-js": "^1.1.1",
     "blake2s-js": "^1.0.3",
-    "scrypt-async": "^1.0.0",
-    "tweetnacl": "git://github.com/jo/tweetnacl-js.git#75-reduce-browserify-build"
+    "scrypt-async": "^1.2.0",
+    "tweetnacl": "^0.14.0"
   },
   "devDependencies": {
-    "browserify": "^9.0.8",
-    "tap-spec": "^3.0.0",
+    "browserify": "^13.0.0",
+    "tap-spec": "^4.1.1",
     "tape": "^4.0.0"
   }
 }
